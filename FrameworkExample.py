@@ -14,6 +14,10 @@ from numpyro.infer import init_to_median,NUTS,MCMC
 from BayesianFramework import BayesianFramework
 from pathlib import Path
 
+import sys
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+#from AnalyticalSoln import GetLogTumorBurden
+
 @jit
 def CalcLogTumorBurdenOnTreatment(tDrugStart,t,g,s,r,n0):
     return jnp.where(r<1e-8,n0+(g-s)*(t-tDrugStart),n0+g*(t-tDrugStart)-(s/r)*(1-jnp.exp(-r*(t-tDrugStart))))
@@ -45,21 +49,21 @@ GetLogTumorBurdenBatch=vmap(GetLogTumorBurden,in_axes=(0,0,0,0,0,0,0))
 def RunModelBatch(globalParams,localParams,modelData):
     tumorBurden=GetLogTumorBurdenBatch(modelData['dates'],modelData['start'],modelData['stop'],60*sigmoid(localParams['tDisp']),jnp.exp(localParams['growth']),jnp.exp(localParams['sens']),jnp.exp(localParams['res']))
     logPsa0=jnp.log(modelData['psas'][:,0])+localParams['psa0Disp']*globalParams['errorStd']
-    return tumorBurden+logPsa0[:,None]
-
-def CalcErrorBatch(globalParams,localParams,modelData,modelOut):
+    modelOut=tumorBurden+logPsa0[:,None]
     return npo.sample("obs",dist.Normal(modelOut[:,1:],globalParams['errorStd']).mask(modelData['masks'][:,1:]),obs=jnp.log(modelData['psas'][:,1:]))
+
+
+#def CalcErrorBatch(globalParams,localParams,modelData,modelOut):
+#    return npo.sample("obs",dist.Normal(modelOut[:,1:],globalParams['errorStd']).mask(modelData['masks'][:,1:]),obs=jnp.log(modelData['psas'][:,1:]))
+
+def GenGlobals():
+    return {'errorStd':npo.sample('errorStd',dist.HalfNormal(0.5))}
 
 if __name__ == "__main__":
 
-    localParams={'growth':(-4.0,2.0,1.0),'sens':(-4.0,2.0,1.0),'res':(-4.0,2.0,1.0),'tDisp':(-2.0,2.0,1.0),'psa0Disp':(0.0,0.0,1.0)}
-    globalParams={'errorStd':(0.5,0.0)}
+    localParams={'growth':(-4.0,2.0,1.0),'sens':(-4.0,2.0,1.0),'res':(-4.0,2.0,1.0),'tDisp':(-2.0,2.0,1.0),'psa0Disp':(0.0,0.0,0.0)}
     data=np.load(Path(__file__).parent/"Bulkl32.npz")
-    ptData={"dates":data['dates'],"start":data['start'],"stop":data['stop'],"psas":data['psas'],"masks":data['masks'],'labs':data['labs']}
-    covariates=data['labs']
-    bf=BayesianFramework(globalParams,localParams,ptData,CovariateFn=None,ModelFn=RunModelBatch,ErrorFn=CalcErrorBatch)
+    ptData={"dates":data['dates'],"start":data['start'],"stop":data['stop'],"psas":data['psas'],"masks":data['masks']}
+    bf=BayesianFramework(ptData,RunModelBatch,localParams,GenGlobals)
     bf.SubsetData(np.arange(50))
-
-    print("JAX devices:", jax.devices())
-    print("JAX device count:", jax.local_device_count())
     bf.RunMCMC(numWarmup=1000,numSamples=1000)
