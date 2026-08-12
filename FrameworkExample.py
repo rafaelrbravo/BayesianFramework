@@ -14,10 +14,6 @@ from numpyro.infer import init_to_median,NUTS,MCMC
 from BayesianFramework import BayesianFramework
 from pathlib import Path
 
-import sys
-sys.path.append(str(Path(__file__).resolve().parent.parent))
-#from AnalyticalSoln import GetLogTumorBurden
-
 @jit
 def CalcLogTumorBurdenOnTreatment(tDrugStart,t,g,s,r,n0):
     return jnp.where(r<1e-8,n0+(g-s)*(t-tDrugStart),n0+g*(t-tDrugStart)-(s/r)*(1-jnp.exp(-r*(t-tDrugStart))))
@@ -51,10 +47,6 @@ def RunModelBatch(globalParams,localParams,modelData):
     logPsa0=jnp.log(modelData['psas'][:,0])+localParams['psa0Disp']*globalParams['errorStd']
     modelOut=tumorBurden+logPsa0[:,None]
     return npo.sample("obs",dist.Normal(modelOut[:,1:],globalParams['errorStd']).mask(modelData['masks'][:,1:]),obs=jnp.log(modelData['psas'][:,1:]))
-
-
-#def CalcErrorBatch(globalParams,localParams,modelData,modelOut):
-#    return npo.sample("obs",dist.Normal(modelOut[:,1:],globalParams['errorStd']).mask(modelData['masks'][:,1:]),obs=jnp.log(modelData['psas'][:,1:]))
 
 def GenGlobals():
     return {'errorStd':npo.sample('errorStd',dist.HalfNormal(0.5))}
