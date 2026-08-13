@@ -6,9 +6,11 @@ from jax import vmap
 from jax import jit
 import numpy as np
 from jax.nn import sigmoid
-from BayesianFramework import BayesianFramework
 from pathlib import Path
+import sys
+if __package__ is None or __package__ == "": sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from BayesianFramework import BayesianFramework
 @jit
 def CalcLogTumorBurdenOnTreatment(tDrugStart,t,g,s,r,n0):
     return jnp.where(r<1e-8,n0+(g-s)*(t-tDrugStart),n0+g*(t-tDrugStart)-(s/r)*(1-jnp.exp(-r*(t-tDrugStart))))

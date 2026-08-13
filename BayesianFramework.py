@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import numpyro.distributions as dist
 from jax import random
 from numpyro.infer import init_to_median,NUTS,MCMC
-from InputValidator import _ValidateInit
+from .InputValidator import _ValidateInit
 
 class BayesianFramework():
     def __init__(self,modelDataFull,ModelFn,ErrorFn,localParams=None,GlobalFn=None,CovariateFn=None,choleskyConcentration=2.0):
@@ -25,32 +25,32 @@ class BayesianFramework():
             self._sampleMeanInds = jnp.where(params[:, 1] > 0)[0]
             self._sampleStdInds = jnp.where(params[:, 2] > 0)[0]
 
-    def _GenPriorsLocal(self):
+    def _GenLocalMeansStds(self):
         localMeans = self._localMeanLocations
         if len(self._sampleMeanInds) > 0:
-            sampledMeans = npo.sample( "local means", dist.Normal( self._localMeanLocations[self._sampleMeanInds], self._localMeanStds[self._sampleMeanInds]))
+            sampledMeans = npo.sample( "local_means", dist.Normal( self._localMeanLocations[self._sampleMeanInds], self._localMeanStds[self._sampleMeanInds]))
             localMeans = localMeans.at[self._sampleMeanInds].set(sampledMeans)
         localStds = jnp.ones(len(self._localParams))
         if len(self._sampleStdInds) > 0:
-            sampledStds = npo.sample( "local stds", dist.HalfNormal( self._localPriorStds[self._sampleStdInds]))
+            sampledStds = npo.sample( "local_stds", dist.HalfNormal( self._localPriorStds[self._sampleStdInds]))
             localStds = localStds.at[self._sampleStdInds].set(sampledStds)
         return localMeans, localStds
 
-    def _GenLocalPriors(self,dataSize,choleskyConcentration):
+    def _GenLocalParams(self,dataSize):
         nLocal = len(self._localParams)
-        uncorrelatedUnitPriors = npo.sample( "locals", dist.Normal(0.0,1.0).expand((dataSize,nLocal)))
+        uncorrelatedUnitParams = npo.sample( "locals", dist.Normal(0.0,1.0).expand((dataSize,nLocal)))
         if nLocal == 1: 
-            correlatedUnitPriors = uncorrelatedUnitPriors
+            correlatedUnitParams = uncorrelatedUnitParams
         else:
-            cholesky = npo.sample( "cholesky", dist.LKJCholesky( nLocal, concentration=choleskyConcentration))
-            correlatedUnitPriors = uncorrelatedUnitPriors @ cholesky.T
-        localMeans,localStds = self._GenPriorsLocal()
-        localPriors = localMeans + correlatedUnitPriors * localStds
-        return dict(zip(self._localParams.keys(),localPriors.T))
+            cholesky = npo.sample( "cholesky", dist.LKJCholesky( nLocal, concentration=self._choleskyConcentration))
+            correlatedUnitParams = uncorrelatedUnitParams @ cholesky.T
+        localMeans,localStds = self._GenLocalMeansStds()
+        localParams = localMeans + correlatedUnitParams * localStds
+        return dict(zip(self._localParams.keys(),localParams.T))
 
     def _RunModel(self,**modelData):
-        nIndices=len(modelData[next(iter(modelData))])
-        if self._localParams: localParams=self._GenLocalPriors(nIndices,choleskyConcentration=self._choleskyConcentration)
+        dataLen=len(modelData[next(iter(modelData))])
+        if self._localParams: localParams=self._GenLocalParams(dataLen)
         else: localParams={}
         if self._GlobalFn is None: globalParams={}
         else: globalParams=self._GlobalFn()

@@ -49,7 +49,7 @@ def _ValidateInit( modelDataFull, ModelFn,ErrorFn, localParams=None, GlobalFn=No
                 f"modelDataFull['{name}'] has length {len(value)}."
             )
 
-        if dataSize == 0: raise ValueError("modelDataFull must contain at least one data entry.") 
+    if dataSize == 0: raise ValueError("modelDataFull must contain at least one data entry.") 
 
 
     # ================================================================
@@ -96,9 +96,11 @@ def _ValidateInit( modelDataFull, ModelFn,ErrorFn, localParams=None, GlobalFn=No
         3,
         optional=False
     )
+
+    # ErrorFn(globalParams, localParams, modelData, modelOut)
     CheckCallable(
         ErrorFn,
-        "ModelFn",
+        "ErrorFn",
         4,
         optional=False
     )
