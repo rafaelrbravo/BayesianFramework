@@ -1,10 +1,9 @@
 import inspect
-import numbers
 import numpy as np
 import jax
 
 
-def _ValidateInit( modelDataFull, ModelFn, localParams=None, GlobalFn=None, CovariateFn=None, choleskyConcentration=2.0):
+def _ValidateInit( modelDataFull, ModelFn,ErrorFn, localParams=None, GlobalFn=None, CovariateFn=None, choleskyConcentration=2.0):
     # ================================================================
     # modelDataFull
     # ================================================================
@@ -50,6 +49,8 @@ def _ValidateInit( modelDataFull, ModelFn, localParams=None, GlobalFn=None, Cova
                 f"modelDataFull['{name}'] has length {len(value)}."
             )
 
+        if dataSize == 0: raise ValueError("modelDataFull must contain at least one data entry.") 
+
 
     # ================================================================
     # Functions
@@ -93,6 +94,12 @@ def _ValidateInit( modelDataFull, ModelFn, localParams=None, GlobalFn=None, Cova
         ModelFn,
         "ModelFn",
         3,
+        optional=False
+    )
+    CheckCallable(
+        ErrorFn,
+        "ModelFn",
+        4,
         optional=False
     )
 

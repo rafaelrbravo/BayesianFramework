@@ -1,19 +1,19 @@
 import numpyro as npo
 import jax.numpy as jnp
 import numpyro.distributions as dist
-from jax import vmap,random
+from jax import random
 from numpyro.infer import init_to_median,NUTS,MCMC
-from jax import jit
 from InputValidator import _ValidateInit
 
 class BayesianFramework():
-    def __init__(self,modelDataFull,ModelFn,localParams=None,GlobalFn=None,CovariateFn=None,choleskyConcentration=2.0):
-        _ValidateInit(modelDataFull,ModelFn,localParams,GlobalFn,CovariateFn,choleskyConcentration)
+    def __init__(self,modelDataFull,ModelFn,ErrorFn,localParams=None,GlobalFn=None,CovariateFn=None,choleskyConcentration=2.0):
+        _ValidateInit(modelDataFull,ModelFn,ErrorFn,localParams,GlobalFn,CovariateFn,choleskyConcentration)
         self._modelDataFull=modelDataFull
         self._modelData=None
         self._localParams={} if localParams is None else localParams
         self._CovariateFn=CovariateFn
         self._ModelFn=ModelFn
+        self._ErrorFn=ErrorFn
         self._GlobalFn=GlobalFn
         self._choleskyConcentration=choleskyConcentration
 
@@ -37,13 +37,16 @@ class BayesianFramework():
         return localMeans, localStds
 
     def _GenLocalPriors(self,dataSize,choleskyConcentration):
-        uncorrelatedUnitPriors=npo.sample("locals",dist.Normal(0.0,1.0).expand((dataSize,len(self._localParams))))
-        cholesky=npo.sample("cholesky",dist.LKJCholesky(len(self._localParams),concentration=choleskyConcentration))
-        correlatedUnitPriors=uncorrelatedUnitPriors @ cholesky.T
-        localMeans,localStds=self._GenPriorsLocal()
-        localPriors=localMeans + correlatedUnitPriors * localStds
-        localPriorsDict=dict(zip(self._localParams.keys(),localPriors.T))
-        return localPriorsDict
+        nLocal = len(self._localParams)
+        uncorrelatedUnitPriors = npo.sample( "locals", dist.Normal(0.0,1.0).expand((dataSize,nLocal)))
+        if nLocal == 1: 
+            correlatedUnitPriors = uncorrelatedUnitPriors
+        else:
+            cholesky = npo.sample( "cholesky", dist.LKJCholesky( nLocal, concentration=choleskyConcentration))
+            correlatedUnitPriors = uncorrelatedUnitPriors @ cholesky.T
+        localMeans,localStds = self._GenPriorsLocal()
+        localPriors = localMeans + correlatedUnitPriors * localStds
+        return dict(zip(self._localParams.keys(),localPriors.T))
 
     def _RunModel(self,**modelData):
         nIndices=len(modelData[next(iter(modelData))])
@@ -54,7 +57,8 @@ class BayesianFramework():
         if self._CovariateFn is not None: 
             covariateEffects=self._CovariateFn(globalParams,localParams,modelData)
             for k,v in covariateEffects.items(): localParams[k]=localParams[k]+v
-        self._ModelFn(globalParams,localParams,modelData)
+        modelOut=self._ModelFn(globalParams,localParams,modelData)
+        self._ErrorFn(globalParams,localParams,modelData,modelOut)
 
     def SubsetData(self,indices): self._modelData = { k: v[indices] for k, v in self._modelDataFull.items() }
 
