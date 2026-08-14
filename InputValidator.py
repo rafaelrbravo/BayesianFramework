@@ -3,12 +3,12 @@ import numpy as np
 import jax
 
 
-def _ValidateInit( modelDataFull, ModelFn,ErrorFn, localParams=None, GlobalFn=None, CovariateFn=None, choleskyConcentration=2.0):
+def _ValidateInit( modelDataFull, ModelFn,ErrorFn, localParams=None, GlobalFn=None, CovariateFn=None, choleskyConcentration=2.0, fixedLocalPriors=None):
     # ================================================================
     # modelDataFull
     # ================================================================
 
-    if not isinstance(modelDataFull, dict):
+    if not isinstance(modelDataFull, (dict,np.lib.npyio.NpzFile)):
         raise TypeError(
             "modelDataFull must be a dictionary."
         )
@@ -228,3 +228,146 @@ def _ValidateInit( modelDataFull, ModelFn,ErrorFn, localParams=None, GlobalFn=No
         raise ValueError(
             "choleskyConcentration must be > 0."
         )
+
+    # ================================================================
+    # fixedLocalPriors
+    # ================================================================
+
+    if fixedLocalPriors is not None:
+
+        if localParams is None or len(localParams) == 0:
+            raise ValueError(
+                "fixedLocalPriors requires at least one local parameter."
+            )
+
+        if not isinstance(fixedLocalPriors, dict):
+            raise TypeError(
+                "fixedLocalPriors must be a dictionary or None."
+            )
+
+        nLocal = len(localParams)
+
+        requiredKeys = {"means", "stds"}
+
+        if nLocal > 1:
+            requiredKeys.add("cholesky")
+
+        missingKeys = requiredKeys - fixedLocalPriors.keys()
+
+        if missingKeys:
+            raise ValueError(
+                "fixedLocalPriors is missing required key"
+                f"{'s' if len(missingKeys) > 1 else ''}: "
+                f"{sorted(missingKeys)}."
+            )
+
+        allowedKeys = {"means", "stds", "cholesky"}
+
+        extraKeys = fixedLocalPriors.keys() - allowedKeys
+
+        if extraKeys:
+            raise ValueError(
+                "fixedLocalPriors contains unrecognized key"
+                f"{'s' if len(extraKeys) > 1 else ''}: "
+                f"{sorted(extraKeys)}."
+            )
+
+        # ------------------------------------------------------------
+        # means / stds
+        # ------------------------------------------------------------
+
+        for key in ("means", "stds"):
+
+            try:
+                values = np.asarray(fixedLocalPriors[key])
+            except Exception as e:
+                raise TypeError(
+                    f"fixedLocalPriors['{key}'] must be a numeric array."
+                ) from e
+
+            if values.ndim != 1:
+                raise ValueError(
+                    f"fixedLocalPriors['{key}'] must be one-dimensional."
+                )
+
+            if len(values) != nLocal:
+                raise ValueError(
+                    f"fixedLocalPriors['{key}'] must contain one value per "
+                    f"local parameter. Expected {nLocal}, got {len(values)}."
+                )
+
+            if not np.issubdtype(values.dtype, np.number):
+                raise TypeError(
+                    f"fixedLocalPriors['{key}'] must contain numeric values."
+                )
+
+            if np.issubdtype(values.dtype, np.complexfloating):
+                raise TypeError(
+                    f"fixedLocalPriors['{key}'] cannot contain complex values."
+                )
+
+            if not np.all(np.isfinite(values)):
+                raise ValueError(
+                    f"fixedLocalPriors['{key}'] cannot contain NaN or infinity."
+                )
+
+            if key == "stds" and np.any(values < 0):
+                raise ValueError(
+                    "fixedLocalPriors['stds'] must contain values >= 0."
+                )
+
+        # ------------------------------------------------------------
+        # cholesky
+        # ------------------------------------------------------------
+
+        if nLocal > 1:
+
+            try:
+                cholesky = np.asarray(fixedLocalPriors["cholesky"])
+            except Exception as e:
+                raise TypeError(
+                    "fixedLocalPriors['cholesky'] must be a numeric array."
+                ) from e
+
+            if cholesky.ndim != 2:
+                raise ValueError(
+                    "fixedLocalPriors['cholesky'] must be two-dimensional."
+                )
+
+            if cholesky.shape != (nLocal, nLocal):
+                raise ValueError(
+                    "fixedLocalPriors['cholesky'] must have shape "
+                    f"({nLocal}, {nLocal}); got {cholesky.shape}."
+                )
+
+            if not np.issubdtype(cholesky.dtype, np.number):
+                raise TypeError(
+                    "fixedLocalPriors['cholesky'] must contain numeric values."
+                )
+
+            if np.issubdtype(cholesky.dtype, np.complexfloating):
+                raise TypeError(
+                    "fixedLocalPriors['cholesky'] cannot contain complex values."
+                )
+
+            if not np.all(np.isfinite(cholesky)):
+                raise ValueError(
+                    "fixedLocalPriors['cholesky'] cannot contain NaN or infinity."
+                )
+
+            if not np.allclose(cholesky, np.tril(cholesky)):
+                raise ValueError(
+                    "fixedLocalPriors['cholesky'] must be lower triangular."
+                )
+
+            if np.any(np.diag(cholesky) <= 0):
+                raise ValueError(
+                    "fixedLocalPriors['cholesky'] must have a positive diagonal."
+                )
+            corr = cholesky @ cholesky.T
+
+            if not np.allclose(np.diag(corr), 1.0):
+                raise ValueError(
+                    "fixedLocalPriors['cholesky'] must be the Cholesky factor "
+                    "of a correlation matrix."
+                )

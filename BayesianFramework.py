@@ -6,8 +6,8 @@ from numpyro.infer import init_to_median,NUTS,MCMC
 from .InputValidator import _ValidateInit
 
 class BayesianFramework():
-    def __init__(self,modelDataFull,ModelFn,ErrorFn,localParams=None,GlobalFn=None,CovariateFn=None,choleskyConcentration=2.0):
-        _ValidateInit(modelDataFull,ModelFn,ErrorFn,localParams,GlobalFn,CovariateFn,choleskyConcentration)
+    def __init__(self,modelDataFull,ModelFn,ErrorFn,localParams=None,GlobalFn=None,CovariateFn=None,choleskyConcentration=2.0,fixedLocalPriors=None):
+        _ValidateInit(modelDataFull,ModelFn,ErrorFn,localParams,GlobalFn,CovariateFn,choleskyConcentration,fixedLocalPriors)
         self._modelDataFull=modelDataFull
         self._modelData=None
         self._localParams={} if localParams is None else localParams
@@ -16,8 +16,9 @@ class BayesianFramework():
         self._ErrorFn=ErrorFn
         self._GlobalFn=GlobalFn
         self._choleskyConcentration=choleskyConcentration
+        self._fixedLocalPriors=fixedLocalPriors
 
-        if self._localParams:
+        if self._localParams and self._fixedLocalPriors is None:
             params = jnp.array(list(self._localParams.values()))
             self._localMeanLocations = params[:, 0]
             self._localMeanStds = params[:, 1]
@@ -25,26 +26,34 @@ class BayesianFramework():
             self._sampleMeanInds = jnp.where(params[:, 1] > 0)[0]
             self._sampleStdInds = jnp.where(params[:, 2] > 0)[0]
 
+        elif self._fixedLocalPriors is not None: 
+            self._fixedLocalPriors = { "means": jnp.asarray(fixedLocalPriors["means"]), "stds": jnp.asarray(fixedLocalPriors["stds"]), }
+            if len(self._localParams) > 1: self._fixedLocalPriors["cholesky"] = jnp.asarray( fixedLocalPriors["cholesky"])
+
     def _GenLocalMeansStds(self):
         localMeans = self._localMeanLocations
         if len(self._sampleMeanInds) > 0:
-            sampledMeans = npo.sample( "local_means", dist.Normal( self._localMeanLocations[self._sampleMeanInds], self._localMeanStds[self._sampleMeanInds]))
+            sampledMeans = npo.sample( "means", dist.Normal( self._localMeanLocations[self._sampleMeanInds], self._localMeanStds[self._sampleMeanInds]))
             localMeans = localMeans.at[self._sampleMeanInds].set(sampledMeans)
         localStds = jnp.ones(len(self._localParams))
         if len(self._sampleStdInds) > 0:
-            sampledStds = npo.sample( "local_stds", dist.HalfNormal( self._localPriorStds[self._sampleStdInds]))
+            sampledStds = npo.sample( "stds", dist.HalfNormal( self._localPriorStds[self._sampleStdInds]))
             localStds = localStds.at[self._sampleStdInds].set(sampledStds)
         return localMeans, localStds
 
     def _GenLocalParams(self,dataSize):
         nLocal = len(self._localParams)
         uncorrelatedUnitParams = npo.sample( "locals", dist.Normal(0.0,1.0).expand((dataSize,nLocal)))
-        if nLocal == 1: 
-            correlatedUnitParams = uncorrelatedUnitParams
+        if self._fixedLocalPriors is not None: 
+            localMeans=self._fixedLocalPriors['means']
+            localStds=self._fixedLocalPriors['stds']
+            if nLocal > 1: cholesky=self._fixedLocalPriors['cholesky']
         else:
-            cholesky = npo.sample( "cholesky", dist.LKJCholesky( nLocal, concentration=self._choleskyConcentration))
-            correlatedUnitParams = uncorrelatedUnitParams @ cholesky.T
-        localMeans,localStds = self._GenLocalMeansStds()
+            localMeans,localStds = self._GenLocalMeansStds()
+            if nLocal > 1: cholesky = npo.sample( "cholesky", dist.LKJCholesky( nLocal, concentration=self._choleskyConcentration))
+
+        if nLocal == 1: correlatedUnitParams = uncorrelatedUnitParams
+        else: correlatedUnitParams = uncorrelatedUnitParams @ cholesky.T
         localParams = localMeans + correlatedUnitParams * localStds
         return dict(zip(self._localParams.keys(),localParams.T))
 
