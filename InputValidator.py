@@ -364,10 +364,3 @@ def _ValidateInit( modelDataFull, ModelFn,ErrorFn, localParams=None, GlobalFn=No
                 raise ValueError(
                     "fixedLocalPriors['cholesky'] must have a positive diagonal."
                 )
-            corr = cholesky @ cholesky.T
-
-            if not np.allclose(np.diag(corr), 1.0):
-                raise ValueError(
-                    "fixedLocalPriors['cholesky'] must be the Cholesky factor "
-                    "of a correlation matrix."
-                )
