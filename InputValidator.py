@@ -3,20 +3,27 @@ import numpy as np
 import jax
 
 
-def _ValidateInit( modelDataFull, ModelFn,ErrorFn, localParams=None, GlobalFn=None, CovariateFn=None, choleskyConcentration=2.0, fixedLocalPriors=None):
+# ====================================================================
+# Public method validators
+# ====================================================================
+
+def _ValidateInit(
+    modelDataFull,
+    ModelFn,
+    TrainLikelihoodFn,
+    localParamNames=None,
+    GlobalFn=None,
+    choleskyConcentration=2.0,
+):
     # ================================================================
     # modelDataFull
     # ================================================================
 
-    if not isinstance(modelDataFull, (dict,np.lib.npyio.NpzFile)):
-        raise TypeError(
-            "modelDataFull must be a dictionary."
-        )
+    if not isinstance(modelDataFull, (dict, np.lib.npyio.NpzFile)):
+        raise TypeError("modelDataFull must be a dictionary.")
 
     if len(modelDataFull) == 0:
-        raise ValueError(
-            "modelDataFull cannot be empty."
-        )
+        raise ValueError("modelDataFull cannot be empty.")
 
     dataSize = None
 
@@ -49,147 +56,65 @@ def _ValidateInit( modelDataFull, ModelFn,ErrorFn, localParams=None, GlobalFn=No
                 f"modelDataFull['{name}'] has length {len(value)}."
             )
 
-    if dataSize == 0: raise ValueError("modelDataFull must contain at least one data entry.") 
-
+    if dataSize == 0:
+        raise ValueError("modelDataFull must contain at least one data entry.")
 
     # ================================================================
     # Functions
     # ================================================================
 
-    def CheckCallable(fn, name, nArgs, optional=False):
-
-        if fn is None:
-            if optional:
-                return
-            raise TypeError(f"{name} cannot be None.")
-
-        if not callable(fn):
-            raise TypeError(
-                f"{name} must be callable; got {type(fn).__name__}."
-            )
-
-        # Check that its Python signature can accept the number of
-        # positional arguments the framework will supply.
-        #
-        # Some valid callable objects do not expose an inspectable
-        # signature, so lack of a signature alone is not an error.
-        try:
-            signature = inspect.signature(fn)
-        except (TypeError, ValueError):
-            return
-
-        try:
-            signature.bind(*([None] * nArgs))
-        except TypeError as e:
-            raise TypeError(
-                f"{name} must accept {nArgs} positional argument"
-                f"{'s' if nArgs != 1 else ''}. "
-                f"Framework call will be incompatible with signature "
-                f"{signature}."
-            ) from e
-
-
     # ModelFn(globalParams, localParams, modelData)
-    CheckCallable(
+    _CheckCallable(
         ModelFn,
         "ModelFn",
         3,
-        optional=False
+        optional=False,
     )
 
-    # ErrorFn(globalParams, localParams, modelData, modelOut)
-    CheckCallable(
-        ErrorFn,
-        "ErrorFn",
+    # TrainLikelihoodFn(globalParams, localParams, modelData, modelOut)
+    _CheckCallable(
+        TrainLikelihoodFn,
+        "TrainLikelihoodFn",
         4,
-        optional=False
+        optional=False,
     )
 
-    # GlobalFn()
-    CheckCallable(
+    # GlobalFn(dataShapes)
+    _CheckCallable(
         GlobalFn,
         "GlobalFn",
-        0,
-        optional=True
+        1,
+        optional=True,
     )
 
-    # CovariateFn(globalParams, localParams, modelData)
-    CheckCallable(
-        CovariateFn,
-        "CovariateFn",
-        3,
-        optional=True
-    )
-
-
     # ================================================================
-    # localParams
+    # localParamNames
     # ================================================================
 
-    if localParams is not None:
+    if localParamNames is not None:
 
-        if not isinstance(localParams, dict):
+        if not isinstance(localParamNames, (list, tuple)):
             raise TypeError(
-                "localParams must be a dictionary or None."
+                "localParamNames must be a list or tuple of strings, or None."
             )
 
-        for name, specification in localParams.items():
+        for i, name in enumerate(localParamNames):
 
             if not isinstance(name, str):
                 raise TypeError(
-                    "localParams keys must be strings; "
+                    f"localParamNames[{i}] must be a string; "
                     f"got {type(name).__name__}."
                 )
 
-            # Must be convertible to a numeric array.
-            try:
-                spec = np.asarray(specification)
-            except Exception as e:
-                raise TypeError(
-                    f"localParams['{name}'] must contain three numeric values."
-                ) from e
-
-            # Require precisely:
-            #
-            # [meanLocation, meanStd, priorStd]
-            #
-            if spec.ndim != 1 or len(spec) != 3:
+            if not name:
                 raise ValueError(
-                    f"localParams['{name}'] must contain exactly three values: "
-                    "[meanLocation, meanStd, priorStd]."
+                    f"localParamNames[{i}] cannot be empty."
                 )
 
-            if not np.issubdtype(spec.dtype, np.number):
-                raise TypeError(
-                    f"localParams['{name}'] must contain numeric values."
-                )
-
-            if np.issubdtype(spec.dtype, np.complexfloating):
-                raise TypeError(
-                    f"localParams['{name}'] cannot contain complex values."
-                )
-
-            if not np.all(np.isfinite(spec)):
-                raise ValueError(
-                    f"localParams['{name}'] cannot contain NaN or infinity."
-                )
-
-            meanLocation, meanStd, priorStd = spec
-
-            # Mean location may be any finite real value.
-
-            if meanStd < 0:
-                raise ValueError(
-                    f"localParams['{name}'] meanStd must be >= 0; "
-                    f"got {meanStd}."
-                )
-
-            if priorStd < 0:
-                raise ValueError(
-                    f"localParams['{name}'] priorStd must be >= 0; "
-                    f"got {priorStd}."
-                )
-
+        if len(set(localParamNames)) != len(localParamNames):
+            raise ValueError(
+                "localParamNames cannot contain duplicate names."
+            )
 
     # ================================================================
     # choleskyConcentration
@@ -229,138 +154,348 @@ def _ValidateInit( modelDataFull, ModelFn,ErrorFn, localParams=None, GlobalFn=No
             "choleskyConcentration must be > 0."
         )
 
+
+def _ValidateTrain(
+    framework,
+    numWarmup,
+    numSamples,
+    num_chains,
+    acceptProb,
+    dense_mass,
+    medianSamples,
+    rngKey,
+):
+    if framework._trainData is None:
+        raise RuntimeError(
+            "Training data have not been set. "
+            "Call SetTrainIndices() before Train()."
+        )
+
+    _CheckNonnegativeInt(numWarmup, "numWarmup")
+    _CheckPositiveInt(numSamples, "numSamples")
+    _CheckPositiveInt(num_chains, "num_chains")
+    _CheckProbability(acceptProb, "acceptProb")
+    _CheckBool(dense_mass, "dense_mass")
+    _CheckPositiveInt(medianSamples, "medianSamples")
+    _CheckRNGKey(rngKey, "rngKey")
+
+
+def _ValidateTest(
+    framework,
+    TestLikelihoodFn,
+    nPosteriorSamples,
+    numWarmup,
+    numSamples,
+    num_chains,
+    acceptProb,
+    dense_mass,
+    medianSamples,
+    rngKey,
+    nTrajectorySamples,
+):
     # ================================================================
-    # fixedLocalPriors
+    # Framework state
     # ================================================================
 
-    if fixedLocalPriors is not None:
+    if framework._trainMCMC is None:
+        raise RuntimeError("Train must be run before Test().")
 
-        if localParams is None or len(localParams) == 0:
+    if framework._testData is None:
+        raise RuntimeError(
+            "Testing data have not been set. "
+            "Call SetTestIndices() before Test()."
+        )
+
+    _CheckRNGKey(rngKey, "rngKey")
+
+    # ================================================================
+    # No-MCMC testing
+    # ================================================================
+
+    if TestLikelihoodFn is None:
+
+        if nTrajectorySamples is None:
             raise ValueError(
-                "fixedLocalPriors requires at least one local parameter."
+                "nTrajectorySamples must be provided when "
+                "TestLikelihoodFn is None."
             )
 
-        if not isinstance(fixedLocalPriors, dict):
-            raise TypeError(
-                "fixedLocalPriors must be a dictionary or None."
-            )
+        _CheckPositiveInt(nTrajectorySamples, "nTrajectorySamples")
 
-        nLocal = len(localParams)
-
-        requiredKeys = {"means", "stds"}
-
-        if nLocal > 1:
-            requiredKeys.add("cholesky")
-
-        missingKeys = requiredKeys - fixedLocalPriors.keys()
-
-        if missingKeys:
+        if nPosteriorSamples is not None:
             raise ValueError(
-                "fixedLocalPriors is missing required key"
-                f"{'s' if len(missingKeys) > 1 else ''}: "
-                f"{sorted(missingKeys)}."
+                "nPosteriorSamples cannot be used when "
+                "TestLikelihoodFn is None."
             )
 
-        allowedKeys = {"means", "stds", "cholesky"}
+        return
 
-        extraKeys = fixedLocalPriors.keys() - allowedKeys
+    # ================================================================
+    # MCMC testing
+    # ================================================================
 
-        if extraKeys:
-            raise ValueError(
-                "fixedLocalPriors contains unrecognized key"
-                f"{'s' if len(extraKeys) > 1 else ''}: "
-                f"{sorted(extraKeys)}."
-            )
+    _CheckCallable(
+        TestLikelihoodFn,
+        "TestLikelihoodFn",
+        4,
+        optional=False,
+    )
 
-        # ------------------------------------------------------------
-        # means / stds
-        # ------------------------------------------------------------
+    if nTrajectorySamples is not None:
+        raise ValueError(
+            "nTrajectorySamples cannot be used when "
+            "TestLikelihoodFn is provided."
+        )
 
-        for key in ("means", "stds"):
+    if nPosteriorSamples is not None:
+        _CheckPositiveInt(nPosteriorSamples, "nPosteriorSamples")
 
-            try:
-                values = np.asarray(fixedLocalPriors[key])
-            except Exception as e:
-                raise TypeError(
-                    f"fixedLocalPriors['{key}'] must be a numeric array."
-                ) from e
+    _CheckNonnegativeInt(numWarmup, "numWarmup")
+    _CheckPositiveInt(numSamples, "numSamples")
+    _CheckPositiveInt(num_chains, "num_chains")
+    _CheckProbability(acceptProb, "acceptProb")
+    _CheckBool(dense_mass, "dense_mass")
+    _CheckPositiveInt(medianSamples, "medianSamples")
 
-            if values.ndim != 1:
-                raise ValueError(
-                    f"fixedLocalPriors['{key}'] must be one-dimensional."
-                )
 
-            if len(values) != nLocal:
-                raise ValueError(
-                    f"fixedLocalPriors['{key}'] must contain one value per "
-                    f"local parameter. Expected {nLocal}, got {len(values)}."
-                )
+def _ValidateSetTrainIndices(
+    framework,
+    indices,
+):
+    _CheckIndices(
+        indices,
+        len(framework._modelDataFull[
+            next(iter(framework._modelDataFull))
+        ]),
+        "indices",
+    )
 
-            if not np.issubdtype(values.dtype, np.number):
-                raise TypeError(
-                    f"fixedLocalPriors['{key}'] must contain numeric values."
-                )
 
-            if np.issubdtype(values.dtype, np.complexfloating):
-                raise TypeError(
-                    f"fixedLocalPriors['{key}'] cannot contain complex values."
-                )
+def _ValidateSetTestIndices(
+    framework,
+    indices,
+):
+    _CheckIndices(
+        indices,
+        len(framework._modelDataFull[
+            next(iter(framework._modelDataFull))
+        ]),
+        "indices",
+    )
 
-            if not np.all(np.isfinite(values)):
-                raise ValueError(
-                    f"fixedLocalPriors['{key}'] cannot contain NaN or infinity."
-                )
 
-            if key == "stds" and np.any(values < 0):
-                raise ValueError(
-                    "fixedLocalPriors['stds'] must contain values >= 0."
-                )
+def _ValidateScoreTrain(
+    framework,
+    ScoreFn,
+    nSamples,
+    RNGkey,
+):
+    if framework._trainMCMC is None:
+        raise RuntimeError(
+            "Train() must be run before ScoreTrain()."
+        )
 
-        # ------------------------------------------------------------
-        # cholesky
-        # ------------------------------------------------------------
+    _CheckCallable(
+        ScoreFn,
+        "ScoreFn",
+        2,
+        optional=False,
+    )
 
-        if nLocal > 1:
+    _CheckPositiveInt(nSamples, "nSamples")
+    _CheckRNGKey(RNGkey, "RNGkey")
 
-            try:
-                cholesky = np.asarray(fixedLocalPriors["cholesky"])
-            except Exception as e:
-                raise TypeError(
-                    "fixedLocalPriors['cholesky'] must be a numeric array."
-                ) from e
 
-            if cholesky.ndim != 2:
-                raise ValueError(
-                    "fixedLocalPriors['cholesky'] must be two-dimensional."
-                )
+def _ValidateScoreTest(
+    framework,
+    ScoreFn,
+    nSamples,
+    RNGkey,
+):
+    if framework._testData is None:
+        raise RuntimeError(
+            "Testing data have not been set."
+        )
 
-            if cholesky.shape != (nLocal, nLocal):
-                raise ValueError(
-                    "fixedLocalPriors['cholesky'] must have shape "
-                    f"({nLocal}, {nLocal}); got {cholesky.shape}."
-                )
+    if (
+        framework._testMCMC is None
+        and framework._testNoMCMC is None
+    ):
+        raise RuntimeError(
+            "Test() must be run before ScoreTest()."
+        )
 
-            if not np.issubdtype(cholesky.dtype, np.number):
-                raise TypeError(
-                    "fixedLocalPriors['cholesky'] must contain numeric values."
-                )
+    _CheckCallable(
+        ScoreFn,
+        "ScoreFn",
+        2,
+        optional=False,
+    )
 
-            if np.issubdtype(cholesky.dtype, np.complexfloating):
-                raise TypeError(
-                    "fixedLocalPriors['cholesky'] cannot contain complex values."
-                )
+    _CheckPositiveInt(nSamples, "nSamples")
+    _CheckRNGKey(RNGkey, "RNGkey")
 
-            if not np.all(np.isfinite(cholesky)):
-                raise ValueError(
-                    "fixedLocalPriors['cholesky'] cannot contain NaN or infinity."
-                )
 
-            if not np.allclose(cholesky, np.tril(cholesky)):
-                raise ValueError(
-                    "fixedLocalPriors['cholesky'] must be lower triangular."
-                )
+def _ValidatePrintTrainSummary(
+    framework,
+):
+    if framework._trainMCMC is None:
+        raise RuntimeError(
+            "Train() must be run before PrintTrainSummary()."
+        )
 
-            if np.any(np.diag(cholesky) <= 0):
-                raise ValueError(
-                    "fixedLocalPriors['cholesky'] must have a positive diagonal."
-                )
+
+def _ValidatePrintTestSummary(
+    framework,
+):
+    if framework._testMCMC is None:
+        raise RuntimeError(
+            "Test() must be run with a TestLikelihoodFn before "
+            "PrintTestSummary()."
+        )
+
+
+# ====================================================================
+# Shared checks
+# ====================================================================
+
+def _CheckCallable(fn, name, nArgs, optional=False):
+
+    if fn is None:
+        if optional:
+            return
+        raise TypeError(f"{name} cannot be None.")
+
+    if not callable(fn):
+        raise TypeError(
+            f"{name} must be callable; got {type(fn).__name__}."
+        )
+
+    try:
+        signature = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return
+
+    try:
+        signature.bind(*([None] * nArgs))
+    except TypeError as e:
+        raise TypeError(
+            f"{name} must accept {nArgs} positional argument"
+            f"{'s' if nArgs != 1 else ''}. "
+            f"Framework call will be incompatible with signature "
+            f"{signature}."
+        ) from e
+
+
+def _CheckPositiveInt(value, name):
+    if isinstance(value, (bool, np.bool_)) or not isinstance(
+        value,
+        (int, np.integer),
+    ):
+        raise TypeError(
+            f"{name} must be an integer; "
+            f"got {type(value).__name__}."
+        )
+
+    if value <= 0:
+        raise ValueError(
+            f"{name} must be > 0."
+        )
+
+
+def _CheckNonnegativeInt(value, name):
+    if isinstance(value, (bool, np.bool_)) or not isinstance(
+        value,
+        (int, np.integer),
+    ):
+        raise TypeError(
+            f"{name} must be an integer; "
+            f"got {type(value).__name__}."
+        )
+
+    if value < 0:
+        raise ValueError(
+            f"{name} must be >= 0."
+        )
+
+
+def _CheckProbability(value, name):
+    if isinstance(value, (bool, np.bool_)) or not isinstance(
+        value,
+        (int, float, np.integer, np.floating),
+    ):
+        raise TypeError(
+            f"{name} must be a real number; "
+            f"got {type(value).__name__}."
+        )
+
+    if not np.isfinite(value):
+        raise ValueError(
+            f"{name} must be finite."
+        )
+
+    if not 0 < value < 1:
+        raise ValueError(
+            f"{name} must be between 0 and 1."
+        )
+
+
+def _CheckBool(value, name):
+    if not isinstance(value, (bool, np.bool_)):
+        raise TypeError(
+            f"{name} must be bool; "
+            f"got {type(value).__name__}."
+        )
+
+
+def _CheckRNGKey(key, name):
+    try:
+        jax.random.key_data(key)
+    except Exception as e:
+        raise TypeError(
+            f"{name} must be a valid JAX random key."
+        ) from e
+
+
+def _CheckIndices(indices, dataSize, name):
+    if not isinstance(
+        indices,
+        (list, tuple, np.ndarray, jax.Array),
+    ):
+        raise TypeError(
+            f"{name} must be a list, tuple, NumPy array, "
+            "or JAX array."
+        )
+
+    arr = np.asarray(indices)
+
+    if arr.ndim != 1:
+        raise ValueError(
+            f"{name} must be one-dimensional."
+        )
+
+    if len(arr) == 0:
+        raise ValueError(
+            f"{name} cannot be empty."
+        )
+
+    if not np.issubdtype(arr.dtype, np.integer):
+        raise TypeError(
+            f"{name} must contain integers."
+        )
+
+    if np.any(arr < 0):
+        raise ValueError(
+            f"{name} cannot contain negative indices."
+        )
+
+    if np.any(arr >= dataSize):
+        raise IndexError(
+            f"{name} contains an index outside modelDataFull, "
+            f"which contains {dataSize} entries."
+        )
+
+    if len(np.unique(arr)) != len(arr):
+        raise ValueError(
+            f"{name} cannot contain duplicate indices."
+        )

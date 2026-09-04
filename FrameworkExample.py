@@ -1,60 +1,155 @@
+# SimpleTumorGrowthExample.py
+
 import numpyro as npo
 npo.set_host_device_count(4)
+
 import jax.numpy as jnp
 import numpyro.distributions as dist
-from jax import vmap
-from jax import jit
-import numpy as np
-from jax.nn import sigmoid
-from pathlib import Path
+from jax import random
+from jax.experimental.ode import odeint
+
 import sys
-if __package__ is None or __package__ == "": sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from pathlib import Path
+if __package__ is None or __package__ == "":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from BayesianFramework import BayesianFramework
 
-@jit
-def CalcLogTumorBurdenOnTreatment(tDrugStart,t,g,s,r,n0):
-    return jnp.where(r<1e-8,n0+(g-s)*(t-tDrugStart),n0+g*(t-tDrugStart)-(s/r)*(1-jnp.exp(-r*(t-tDrugStart))))
-@jit
-def CalcLogTumorBurden(t0,tsPred,g,s,r,tDrugStart,tDrugEnd):
-    nStart=g*(tDrugStart-t0)
-    preTs=tsPred<tDrugStart
-    onTs=(tsPred>=tDrugStart)&(tsPred<=tDrugEnd)
 
-    preNs=g*(tsPred-t0)
-    onNs=CalcLogTumorBurdenOnTreatment(tDrugStart,tsPred,g,s,r,nStart)
-    nEnd=CalcLogTumorBurdenOnTreatment(tDrugStart,tDrugEnd,g,s,r,nStart)
-    postNs=nEnd+g*(tsPred-tDrugEnd)
+# ---------------------------------------------------------------------
+# Model components
+# ---------------------------------------------------------------------
 
-    return jnp.where(preTs,preNs,jnp.where(onTs,onNs,postNs))
-
-@jit
-def GetLogTumorBurden(ts,tDrugStart,tDrugEnd,tDisp,g,s,r):
-    tDrugStart+=tDisp
-    tDrugEnd+=tDisp
-    t0=ts[0]
-    tsPred=ts[1:]
-    ns=CalcLogTumorBurden(t0,tsPred,g,s,r,tDrugStart,tDrugEnd)
-    return jnp.concatenate([jnp.array([0.0]),ns])
+# Exponential tumor growth:
+#     dV/dt = gV
+def ODE(V, t, g):
+    return g * V
 
 
-GetLogTumorBurdenBatch=vmap(GetLogTumorBurden,in_axes=(0,0,0,0,0,0,0))
+# localParams["g"] is the standardized patient-specific deviation.
+# Convert it to the physical growth rate using the population mean/std.
+def ModelFn(globalParams, localParams, data):
+    g = globalParams["gMean"] + globalParams["gStd"] * localParams["g"]
+    return odeint(ODE, data["V0"], data["times"], g)
 
-def RunModelBatch(globalParams,localParams,modelData):
-    logTumorBurden=GetLogTumorBurdenBatch(modelData['dates'],modelData['start'],modelData['stop'],60*sigmoid(localParams['tDisp']),jnp.exp(localParams['growth']),jnp.exp(localParams['sens']),jnp.exp(localParams['res']))
-    logPsa0=jnp.log(modelData['psas'][:,0])+localParams['psa0Disp']*globalParams['errorStd']
-    return logTumorBurden+logPsa0[:,None]
 
-def CalcError(globalParams,localParams,modelData,modelOut):
-    return npo.sample("obs",dist.Normal(modelOut[:,1:],globalParams['errorStd']).mask(modelData['masks'][:,1:]),obs=jnp.log(modelData['psas'][:,1:]))
+# Population parameters and observation noise.
+def GlobalFn(dataShapes):
+    return {
+        "gMean": npo.sample("gMean", dist.Normal(0.15, 0.1)),
+        "gStd":  npo.sample("gStd", dist.HalfNormal(0.1)),
+        "sigma": npo.sample("sigma", dist.HalfNormal(0.1)),
+    }
 
-def GenGlobals():
-    return {'errorStd':npo.sample('errorStd',dist.HalfNormal(0.5))}
 
-if __name__ == "__main__":
+# Training uses every tumor-size measurement.
+def TrainLikelihoodFn(globalParams, localParams, data, modelOut):
+    npo.sample("obs", dist.Normal(modelOut, globalParams["sigma"]), obs=data["tumorSize"])
 
-    localParams={'growth':(-4.0,2.0,1.0),'sens':(-4.0,2.0,1.0),'res':(-4.0,2.0,1.0),'tDisp':(-2.0,2.0,1.0),'psa0Disp':(0.0,0.0,0.0)}
-    data=np.load(Path(__file__).parent/"Bulkl32.npz")
-    ptData={"dates":data['dates'],"start":data['start'],"stop":data['stop'],"psas":data['psas'],"masks":data['masks']}
-    bf=BayesianFramework(ptData,RunModelBatch,CalcError,localParams,GenGlobals)
-    bf.SubsetData(np.arange(50))
-    bf.RunMCMC(numWarmup=1000,numSamples=1000)
+
+# Test MCMC only uses the first nFit observations.
+def TestLikelihoodFn(globalParams, localParams, data, modelOut):
+    nFit = 3
+    mask = jnp.arange(modelOut.shape[-1]) < nFit
+    npo.sample("obsTest", dist.Normal(modelOut, globalParams["sigma"]).mask(mask), obs=data["tumorSize"])
+
+
+# Score one trajectory against all available observations.
+def ScoreFn(modelOut, data):
+    return jnp.mean(jnp.abs(modelOut - data["tumorSize"]))
+
+
+# ---------------------------------------------------------------------
+# Generate 10 synthetic patient trajectories
+# ---------------------------------------------------------------------
+
+keyG, keyNoise = random.split(random.PRNGKey(0))
+nPatients = 10
+nTimes = 8
+times = jnp.linspace(0, 10, nTimes)
+
+# True population:
+#     mean growth rate = 0.15
+#     std growth rate  = 0.03
+trueG = 0.15 + 0.03 * random.normal(keyG, (nPatients,))
+
+# Give patients slightly different initial tumor sizes.
+V0 = jnp.linspace(0.8, 1.2, nPatients)
+trueTumorSize = V0[:, None] * jnp.exp(trueG[:, None] * times)
+tumorSize = ( trueTumorSize + 0.05 * random.normal(keyNoise, trueTumorSize.shape))
+data = { "times": jnp.tile(times, (nPatients, 1)), "V0": V0, "tumorSize": tumorSize, }
+
+
+# ---------------------------------------------------------------------
+# Construct framework
+# ---------------------------------------------------------------------
+
+bf = BayesianFramework(modelDataFull=data, ModelFn=ModelFn, TrainLikelihoodFn=TrainLikelihoodFn, localParamNames=["g"], GlobalParamFn=GlobalFn)
+
+# Patients 0-4 train the population model.
+# Patients 5-9 are completely held out.
+bf.SetTrainIndices(jnp.arange(5))
+bf.SetTestIndices(jnp.arange(5, 10))
+
+
+# ---------------------------------------------------------------------
+# 1. TRAINING
+#
+# Infer:
+#
+#     population mean of g
+#     population std of g
+#     g for each training patient
+#     observation noise sigma
+#
+# using ALL observations from the five training patients.
+# ---------------------------------------------------------------------
+
+bf.Train(numWarmup=500, numSamples=500, num_chains=4, rngKey=random.PRNGKey(2))
+trainScores = bf.ScoreTrain(ScoreFn=ScoreFn, nSamples=500, RNGkey=random.PRNGKey(3))
+bf.PrintTrainSummary()
+
+
+# ---------------------------------------------------------------------
+# 2. TESTING WITHOUT MCMC
+#
+# Do not look at the test-patient observations.
+#
+# Sample population parameters from the training posterior, sample
+# unseen-patient local parameters from the learned population
+# distribution, and generate trajectories.
+# ---------------------------------------------------------------------
+
+bf.Test(TestLikelihoodFn=None, nTrajectorySamples=500, rngKey=random.PRNGKey(4))
+noMCMCScores = bf.ScoreTest(ScoreFn=ScoreFn, nSamples=500, RNGkey=random.PRNGKey(5))
+
+
+# ---------------------------------------------------------------------
+# 3. TESTING WITH MCMC
+#
+# Use the learned training population distribution as the prior.
+#
+# TestLikelihoodFn exposes only the first nFit=3 tumor measurements.
+# Each test patient's g is therefore updated using their early
+# trajectory.
+#
+# ScoreFn then compares the posterior trajectories against all
+# available measurements.
+# ---------------------------------------------------------------------
+
+bf.Test(TestLikelihoodFn=TestLikelihoodFn, nPosteriorSamples=None, numWarmup=500, numSamples=500, num_chains=4, rngKey=random.PRNGKey(6))
+testMCMCScores = bf.ScoreTest(ScoreFn=ScoreFn, nSamples=500, RNGkey=random.PRNGKey(7))
+bf.PrintTestSummary()
+
+
+# ---------------------------------------------------------------------
+# Results
+# ---------------------------------------------------------------------
+
+print("True population mean g:", jnp.mean(trueG))
+print("True population std g: ", jnp.std(trueG))
+
+print()
+print("Training score:      ", jnp.mean(trainScores))
+print("Test score, no MCMC: ", jnp.mean(noMCMCScores))
+print("Test score, MCMC:    ", jnp.mean(testMCMCScores))
