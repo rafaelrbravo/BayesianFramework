@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "BayesianFramework"
+version = "0.1.0"
+dependencies = [
+    "jax",
+    "numpyro",
+    "numpy",
+    "cloudpickle",
+]
+
+[tool.setuptools]
+packages = ["BayesianFramework"]
+
+[tool.setuptools.package-dir]
+BayesianFramework = "."
