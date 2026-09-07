@@ -2,129 +2,139 @@ import numpyro as npo
 import numpyro.distributions as dist
 from jax import random, vmap
 from numpyro.infer import init_to_median,NUTS,MCMC
-from .InputValidator import (
-    _ValidateInit,
-    _ValidateTrain,
-    _ValidateTest,
-    _ValidateSetTrainIndices,
-    _ValidateSetTestIndices,
-    _ValidateScoreTrain,
-    _ValidateScoreTest,
-    _ValidatePrintTrainSummary,
-    _ValidatePrintTestSummary,)
-from .OutputUtils import _PrintSummary
+from .InputValidator import _ValidateInit, _ValidateTrain, _ValidateTest, _ValidateScoreTrain, _ValidateScoreTest, _ValidateSetRng
+from .OutputUtils import _PrintSummary,_PrintTestSummary,_GetRecord
 import jax.numpy as jnp
-
+import cloudpickle
+from pprint import pprint
 
 class BayesianFramework():
-    def __init__(self,modelDataFull,ModelFn,TrainLikelihoodFn,localParamNames=None,GlobalParamFn=None,choleskyConcentration=2.0):
-        _ValidateInit(modelDataFull,ModelFn,TrainLikelihoodFn,localParamNames,GlobalParamFn,choleskyConcentration)
+    def __init__(self,modelDataFull,ModelFn,localParamNames=None,GlobalParamFn=None,choleskyConcentration=2.0,rngSeed=None):
+        _ValidateInit(modelDataFull,ModelFn,localParamNames,GlobalParamFn,choleskyConcentration,rngSeed)
         self._modelDataFull=modelDataFull
         self._localParamNames=[] if localParamNames is None else localParamNames
         self._ModelFn=ModelFn
-        self._TrainLikelihoodFn=TrainLikelihoodFn
         self._GlobalFn=GlobalParamFn
         self._choleskyConcentration=choleskyConcentration
-        self._trainMCMC=None
-        self._trainData=None
+        self._modelFnName=self._ModelFn.__name__
+        self._globalFnName=None if self._GlobalFn is None else self._GlobalFn.__name__
+        self._trainPost=None
+        self._testPost=None
         self._trainIndices=None
-        self._testMCMC=None
         self._testNoMCMC=None
         self._testIndices=None
-        self._testData=None
         self._globalNames=None
-        self._localNames=self._localParamNames
-        if self._GlobalFn is not None: self._dataShapes={key:value.shape[1:] for key,value in self._modelDataFull.items()}
+        self._trainParams = None
+        self._testParams = None
+        self._key=None if rngSeed is None else random.PRNGKey(rngSeed)
 
-    def Train(self,numWarmup=2000,numSamples=2000,num_chains=4,acceptProb=0.95,dense_mass=False,medianSamples=50,rngKey=random.PRNGKey(0)):
-        _ValidateTrain(self,numWarmup,numSamples,num_chains,acceptProb,dense_mass,medianSamples,rngKey)
+    def Train(self,trainIndices,TrainLikelihoodFn,numWarmup=2000,numSamples=2000,num_chains=4,acceptProb=0.95,dense_mass=False,medianSamples=50,printSummary=False,rngSeed=None):
+        _ValidateTrain(self,trainIndices,TrainLikelihoodFn,numWarmup,numSamples,num_chains,acceptProb,dense_mass,medianSamples,printSummary,rngSeed)
+        self._trainParams = { "numWarmup": numWarmup, "numSamples": numSamples, "numChains": num_chains, "acceptProb": acceptProb, "denseMass": dense_mass, "medianSamples": medianSamples, "trainLikelihoodName": TrainLikelihoodFn.__name__}
+        self._trainIndices=trainIndices
+        self._globalNames=None
+        dataShapes={key:value.shape[1:] for key,value in self._modelDataFull.items()}
         kernel=NUTS( self._RunMCMCTrain, init_strategy=init_to_median(num_samples=medianSamples), target_accept_prob=acceptProb, dense_mass=dense_mass)
         mcmc=MCMC( kernel, num_warmup=numWarmup, num_samples=numSamples, num_chains=num_chains, chain_method="parallel")
-        mcmc.run(rngKey,extra_fields=("num_steps","accept_prob"),**self._trainData)
-        self._trainMCMC=mcmc
-        return self._trainMCMC
+        mcmc.run(self._NextKey(rngSeed),TrainLikelihoodFn,dataShapes,extra_fields=("num_steps","accept_prob"),**self._GetTrainData())
+        self._trainPost=mcmc.get_samples(group_by_chain=False)
+        self._testPost=None
+        self._testNoMCMC=None
+        self._testParams=None
+        if printSummary: self._PrintTrainSummary(mcmc)
+        return mcmc
 
-    def Test(self,TestLikelihoodFn=None,nPosteriorSamples=None,numWarmup=2000,numSamples=2000,num_chains=4,acceptProb=0.95,dense_mass=False,medianSamples=50,rngKey=random.PRNGKey(0),nTrajectorySamples=None):
-        _ValidateTest(self,TestLikelihoodFn,nPosteriorSamples,numWarmup,numSamples,num_chains,acceptProb,dense_mass,medianSamples,rngKey,nTrajectorySamples)
-        if TestLikelihoodFn is None: return self._TestNoMCMC(nTrajectorySamples,rngKey)
-        return self._TestMCMC(TestLikelihoodFn,nPosteriorSamples,numWarmup,numSamples,num_chains,acceptProb,dense_mass,medianSamples,rngKey)
+    def Test(self,testIndices,TestLikelihoodFn=None,nPosteriorSamples=None,numWarmup=2000,numSamples=2000,num_chains=4,acceptProb=0.95,dense_mass=False,medianSamples=50,nTrajectorySamples=None,printSummary=False,rngSeed=None):
+        _ValidateTest(self,testIndices,TestLikelihoodFn,nPosteriorSamples,numWarmup,numSamples,num_chains,acceptProb,dense_mass,medianSamples,nTrajectorySamples,printSummary,rngSeed)
+        self._testParams = { "mode":"NoMCMC" if TestLikelihoodFn is None else "MCMC","nPosteriorSamples": nPosteriorSamples, "numWarmup": numWarmup, "numSamples": numSamples, 
+                            "numChains": num_chains, "acceptProb": acceptProb, "denseMass": dense_mass, "medianSamples": medianSamples, "nTrajectorySamples": nTrajectorySamples, "testLikelihoodName": None if TestLikelihoodFn is None else TestLikelihoodFn.__name__}
+        self._testIndices=testIndices
+        if TestLikelihoodFn is None: 
+            result=self._TestNoMCMC(nTrajectorySamples,rngSeed)
+            if printSummary: self._PrintTestSummary(None)
+        else: 
+            result=self._TestMCMC(TestLikelihoodFn,nPosteriorSamples,numWarmup,numSamples,num_chains,acceptProb,dense_mass,medianSamples,rngSeed)
+            if printSummary: self._PrintTestSummary(result)
+        return result
 
-    def SetTrainIndices(self,indices):
-        _ValidateSetTrainIndices(self,indices)
-        self._trainIndices=indices
-        self._trainData={k:v[indices] for k,v in self._modelDataFull.items()}
+    def ScoreTrain(self,ScoreFn):
+        _ValidateScoreTrain(self,ScoreFn)
+        return self._ScoreModelOutput( ScoreFn,self.GetTrainModelOutput(), self._GetTrainData())
 
-    def SetTestIndices(self,indices):
-        _ValidateSetTestIndices(self,indices)
-        self._testIndices=indices
-        self._testData={k:v[indices] for k,v in self._modelDataFull.items()}
-
-    def ScoreTrain(self,ScoreFn,nSamples,RNGkey):
-        _ValidateScoreTrain(self,ScoreFn,nSamples,RNGkey)
-        return self._ScoreTrajectories( ScoreFn,self._trainMCMC, self._trainData, nSamples, RNGkey, "__trainModelOutput__")
-
-    def ScoreTest(self,ScoreFn,nSamples,RNGkey): 
-        _ValidateScoreTest(self,ScoreFn,nSamples,RNGkey)
-        if self._testMCMC is not None: return jnp.array([self._ScoreTrajectories( ScoreFn,test, self._testData, nSamples, RNGkey, "__testModelOutput__") for test in self._testMCMC])
-        else: return self._ScoreTrajectoriesArray( ScoreFn,self._testNoMCMC, self._testData, nSamples, RNGkey)
-
-    def PrintTrainSummary(self): 
-        _ValidatePrintTrainSummary(self)
-        _PrintSummary(self._trainMCMC,self._localNames,self._globalNames)
-
-    def PrintTestSummary(self): 
-        _ValidatePrintTestSummary(self)
-        for mcmc in self._testMCMC: _PrintSummary(mcmc,self._localNames,self._globalNames)
+    def ScoreTest(self,ScoreFn): 
+        _ValidateScoreTest(self,ScoreFn)
+        return self._ScoreModelOutput( ScoreFn,self.GetTestModelOutput(), self._GetTestData())
 
     def GetTrainModelOutput(self):
-        if self._trainMCMC is None: raise RuntimeError("Train must be run before getting training model output.")
-        return self._trainMCMC.get_samples( group_by_chain=False)["__trainModelOutput__"]
+        if self._trainPost is None: raise RuntimeError("Train must be run before getting training model output.")
+        return self._GetModelOutput(self._trainPost,"__trainModelOutput__")
 
     def GetTestModelOutput(self):
-        if self._testMCMC is not None: return [ mcmc.get_samples( group_by_chain=False)["__testModelOutput__"] for mcmc in self._testMCMC]
+        if self._testPost is not None: 
+            outputs=[ self._GetModelOutput(post,"__testModelOutput__") for post in self._testPost]
+            return {key:jnp.concatenate([output[key] for output in outputs],axis=0) for key in outputs[0]}
         if self._testNoMCMC is not None: return self._testNoMCMC
         raise RuntimeError("Test must be run before getting testing model output.")
 
-    def GetTrainData(self): return self._trainData
-    def GetTestData(self): return self._testData
-    def GetTrainIndices(self): return self._trainIndices
-    def GetTestIndices(self): return self._testIndices
-    def GetTrainMCMC(self): return self._trainMCMC
-    def GetTestMCMC(self): return self._testMCMC
+    def SetRng(self,rngSeed): 
+        _ValidateSetRng(rngSeed)
+        self._key=random.PRNGKey(rngSeed)
 
-    def _TestMCMC(self,TestLikelihoodFn,nPosteriorSamples=None,numWarmup=2000,numSamples=2000,num_chains=4, acceptProb=0.95,dense_mass=False,medianSamples=50,rngKey=random.PRNGKey(0)):
-        self._testNoMCMC=None
-        posteriorKey,rngKey=random.split(rngKey)
-        posteriors=self._SampleTrainingPosterior(nPosteriorSamples,posteriorKey)
+    def GetRecord(self,print=False): 
+        record=_GetRecord(self)
+        if print: pprint(record)
+        return record
+
+    def Save(self,fileName):
+        with open(fileName,"wb") as file:
+            cloudpickle.dump(self,file)
+
+    @staticmethod
+    def Load(fileName):
+        with open(fileName,"rb") as file:
+            return cloudpickle.load(file)
+
+    def _PrintTrainSummary(self,mcmc): 
+        _PrintSummary(mcmc,self._localParamNames,self._globalNames,"--= Training posterior summary =--")
+
+    def _PrintTestSummary(self,mcmc): 
+        _PrintTestSummary(mcmc,self._testNoMCMC,self._localParamNames,self._globalNames)
+
+    def _TestMCMC(self,TestLikelihoodFn,nPosteriorSamples=None,numWarmup=2000,numSamples=2000,num_chains=4, acceptProb=0.95,dense_mass=False,medianSamples=50,rngSeed=None):
+        postKey,runKey=random.split(self._NextKey(rngSeed),2)
+        posteriors=self._SampleTrainingPosterior(nPosteriorSamples,postKey)
         kernel=NUTS( self._RunMCMCTest, init_strategy=init_to_median(num_samples=medianSamples), target_accept_prob=acceptProb, dense_mass=dense_mass)
+        testData=self._GetTestData()
         if nPosteriorSamples is None: 
             mcmc=MCMC(kernel,num_warmup=numWarmup,num_samples=numSamples, num_chains=num_chains,chain_method="parallel")
-            mcmc.run(rngKey,TestLikelihoodFn,posteriors, extra_fields=("num_steps","accept_prob"), **self._testData)
-            self._testMCMC=[mcmc]
-            return self._testMCMC
-        self._testMCMC=[]
+            mcmc.run(runKey,TestLikelihoodFn,posteriors, extra_fields=("num_steps","accept_prob"), **testData)
+            self._testPost=[mcmc.get_samples(group_by_chain=False)]
+            return [mcmc]
+        mcmcs=[]
+        runKeys = random.split(runKey, nPosteriorSamples)
         for i in range(nPosteriorSamples):
-            rngKey,mcmcKey=random.split(rngKey)
             posterior={name:value[i] for name,value in posteriors.items()}
             mcmc=MCMC(kernel,num_warmup=numWarmup,num_samples=numSamples, num_chains=num_chains,chain_method="parallel")
-            mcmc.run(mcmcKey,TestLikelihoodFn,posterior, extra_fields=("num_steps","accept_prob"), **self._testData)
-            self._testMCMC.append(mcmc)
-        return self._testMCMC
+            mcmc.run(runKeys[i],TestLikelihoodFn,posterior, extra_fields=("num_steps","accept_prob"), **testData)
+            mcmcs.append(mcmc)
+        self._testPost=[m.get_samples(group_by_chain=False) for m in mcmcs]
+        return mcmcs
 
-    def _TestNoMCMC(self,nSamples,RNGkey):
-        self._testMCMC=None
-        posteriorKey,localKey=random.split(RNGkey)
-        posterior=self._SampleTrainingPosterior(nSamples,posteriorKey)
-        nTest=len(self._testData[next(iter(self._testData))])
+    def _TestNoMCMC(self,nSamples,rngSeed=None):
+        self._testPost=None
+        postKey,sampleKey=random.split(self._NextKey(rngSeed),2)
+        posterior=self._SampleTrainingPosterior(nSamples,postKey)
+        testData=self._GetTestData()
+        nTest=len(testData[next(iter(testData))])
         nLocal=len(self._localParamNames)
         if nLocal>0:
-            localSamples=random.normal(localKey,(nSamples,nTest,nLocal))
+            localSamples=random.normal(sampleKey,(nSamples,nTest,nLocal))
             if nLocal>1:
                 localSamples=jnp.einsum("spi,sji->spj",localSamples,posterior["__localCholesky__"])
             localParams={name:localSamples[:,:,i] for i,name in enumerate(self._localParamNames)}
         else: localParams={}
         globalParams={name:posterior[name] for name in self._globalNames}
-        modelOut=vmap(vmap(self._ModelFn,in_axes=(None,0,0)),in_axes=(0,0,None))(globalParams,localParams,self._testData)
+        modelOut=vmap(vmap(self._ModelFn,in_axes=(None,0,0)),in_axes=(0,0,None))(globalParams,localParams,testData)
         self._testNoMCMC=modelOut
         return modelOut
 
@@ -139,35 +149,29 @@ class BayesianFramework():
             localSamples=localSamples@cholesky.T
         return dict(zip(self._localParamNames,localSamples.T))
 
-    def _RunMCMCTrain(self,**modelData):
+    def _RunMCMCTrain(self,TrainLikelihoodFn,dataShapes,**modelData):
         dataLen=len(modelData[next(iter(modelData))])
         localParams=self._GenLocalParamsTraining(dataLen) if self._localParamNames else {}
-        globalParams=self._GlobalFn(self._dataShapes) if self._GlobalFn is not None else {}
-        self._globalNames=globalParams.keys()
+        globalParams=self._GlobalFn(dataShapes) if self._GlobalFn is not None else {}
+        if self._globalNames is None: self._globalNames=list(globalParams)
+        for name,value in globalParams.items(): npo.deterministic(f"__globalParam__{name}",value)
         modelOut=vmap(self._ModelFn,in_axes=(None,0,0))(globalParams,localParams,modelData)
-        npo.deterministic("__trainModelOutput__",modelOut)
-        self._TrainLikelihoodFn(globalParams,localParams,modelData,modelOut)
+        for name,value in modelOut.items(): npo.deterministic(f"__trainModelOutput__{name}",value)
+        TrainLikelihoodFn(globalParams,localParams,modelData,modelOut)
 
-    def _ScoreTrajectoriesArray(self,ScoreFn,samples,data,nSamples,RNGkey):
-        indices=self._GetRandomIndices(nSamples,len(samples),RNGkey)
-        subset=samples[indices]
-        return vmap(vmap(ScoreFn,in_axes=(0,0)),in_axes=(0,None))(subset,data)
-
-    def _ScoreTrajectories(self,ScoreFn,mcmc,data,nSamples,RNGkey,name):
-        samples=mcmc.get_samples(group_by_chain=False)[name]
-        return self._ScoreTrajectoriesArray(ScoreFn,samples,data,nSamples,RNGkey)
+    def _ScoreModelOutput(self,ScoreFn,modelOut,data):
+        return vmap(vmap(ScoreFn,in_axes=(0,0)),in_axes=(0,None))(modelOut,data)
 
     def _SampleTrainingPosterior(self,nSamples,RNGkey):
-        samples=self._trainMCMC.get_samples(group_by_chain=False)
         posterior={}
         if nSamples is None:
             if len(self._localParamNames)>1:
-                posterior["__localCholesky__"]=jnp.median(samples["__localCholesky__"],axis=0)
-            for name in self._globalNames: posterior[name]=jnp.median(samples[name],axis=0)
+                posterior["__localCholesky__"]=jnp.median(self._trainPost["__localCholesky__"],axis=0)
+            for name in self._globalNames: posterior[name]=jnp.median(self._trainPost[f"__globalParam__{name}"],axis=0)
         else:
-            idxs=self._GetRandomIndices(nSamples,next(iter(samples.values())).shape[0],RNGkey)
-            if len(self._localParamNames)>1: posterior["__localCholesky__"]=samples["__localCholesky__"][idxs]
-            for name in self._globalNames: posterior[name]=samples[name][idxs]
+            idxs=self._GetRandomIndices(nSamples,next(iter(self._trainPost.values())).shape[0],RNGkey)
+            if len(self._localParamNames)>1: posterior["__localCholesky__"]=self._trainPost["__localCholesky__"][idxs]
+            for name in self._globalNames:  posterior[name]=self._trainPost[f"__globalParam__{name}"][idxs]
         return posterior
 
     def _GenLocalParamsTesting(self,posterior,dataSize):
@@ -181,5 +185,20 @@ class BayesianFramework():
         localParams=self._GenLocalParamsTesting(posterior,dataLen) if self._localParamNames else {}
         globalParams={name:posterior[name] for name in self._globalNames}
         modelOut=vmap(self._ModelFn,in_axes=(None,0,0))(globalParams,localParams,modelData)
-        npo.deterministic("__testModelOutput__",modelOut)
+        for name,value in modelOut.items(): npo.deterministic(f"__testModelOutput__{name}",value)
         TestLikelihoodFn(globalParams,localParams,modelData,modelOut)
+
+    def _GetModelOutput(self,post,title):
+        outputNames = [name for name in post if name.startswith(title)]
+        return {name.removeprefix(title):post[name] for name in outputNames}
+
+    def _NextKey(self,seed=None):
+        if seed is not None: return random.PRNGKey(seed)
+        self._key,key=random.split(self._key)
+        return key
+
+    def _GetTrainData(self):
+        return { k: v[self._trainIndices] for k, v in self._modelDataFull.items() }
+
+    def _GetTestData(self):
+        return { k: v[self._testIndices] for k, v in self._modelDataFull.items() }

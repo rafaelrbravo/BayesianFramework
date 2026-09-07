@@ -10,10 +10,10 @@ import jax
 def _ValidateInit(
     modelDataFull,
     ModelFn,
-    TrainLikelihoodFn,
     localParamNames=None,
-    GlobalFn=None,
+    GlobalParamFn=None,
     choleskyConcentration=2.0,
+    rngSeed=None,
 ):
     # ================================================================
     # modelDataFull
@@ -28,11 +28,13 @@ def _ValidateInit(
     dataSize = None
 
     for name, value in modelDataFull.items():
-
         if not isinstance(name, str):
             raise TypeError(
                 f"modelDataFull keys must be strings; got {type(name).__name__}."
             )
+
+        if not name:
+            raise ValueError("modelDataFull keys cannot be empty strings.")
 
         if not isinstance(value, (jax.Array, np.ndarray)):
             raise TypeError(
@@ -48,7 +50,6 @@ def _ValidateInit(
 
         if dataSize is None:
             dataSize = len(value)
-
         elif len(value) != dataSize:
             raise ValueError(
                 "All arrays in modelDataFull must have the same first "
@@ -64,42 +65,22 @@ def _ValidateInit(
     # ================================================================
 
     # ModelFn(globalParams, localParams, modelData)
-    _CheckCallable(
-        ModelFn,
-        "ModelFn",
-        3,
-        optional=False,
-    )
+    _CheckCallable(ModelFn, "ModelFn", 3, optional=False)
 
-    # TrainLikelihoodFn(globalParams, localParams, modelData, modelOut)
-    _CheckCallable(
-        TrainLikelihoodFn,
-        "TrainLikelihoodFn",
-        4,
-        optional=False,
-    )
-
-    # GlobalFn(dataShapes)
-    _CheckCallable(
-        GlobalFn,
-        "GlobalFn",
-        1,
-        optional=True,
-    )
+    # GlobalParamFn(dataShapes)
+    _CheckCallable(GlobalParamFn, "GlobalParamFn", 1, optional=True)
 
     # ================================================================
     # localParamNames
     # ================================================================
 
     if localParamNames is not None:
-
         if not isinstance(localParamNames, (list, tuple)):
             raise TypeError(
                 "localParamNames must be a list or tuple of strings, or None."
             )
 
         for i, name in enumerate(localParamNames):
-
             if not isinstance(name, str):
                 raise TypeError(
                     f"localParamNames[{i}] must be a string; "
@@ -107,14 +88,10 @@ def _ValidateInit(
                 )
 
             if not name:
-                raise ValueError(
-                    f"localParamNames[{i}] cannot be empty."
-                )
+                raise ValueError(f"localParamNames[{i}] cannot be empty.")
 
         if len(set(localParamNames)) != len(localParamNames):
-            raise ValueError(
-                "localParamNames cannot contain duplicate names."
-            )
+            raise ValueError("localParamNames cannot contain duplicate names.")
 
     # ================================================================
     # choleskyConcentration
@@ -128,60 +105,59 @@ def _ValidateInit(
         ) from e
 
     if concentration.ndim != 0:
-        raise TypeError(
-            "choleskyConcentration must be a scalar."
-        )
+        raise TypeError("choleskyConcentration must be a scalar.")
 
     if not np.issubdtype(concentration.dtype, np.number):
-        raise TypeError(
-            "choleskyConcentration must be numeric."
-        )
+        raise TypeError("choleskyConcentration must be numeric.")
 
     if np.issubdtype(concentration.dtype, np.complexfloating):
-        raise TypeError(
-            "choleskyConcentration must be real."
-        )
+        raise TypeError("choleskyConcentration must be real.")
 
     concentration = concentration.item()
 
     if not np.isfinite(concentration):
-        raise ValueError(
-            "choleskyConcentration must be finite."
-        )
+        raise ValueError("choleskyConcentration must be finite.")
 
     if concentration <= 0:
-        raise ValueError(
-            "choleskyConcentration must be > 0."
-        )
+        raise ValueError("choleskyConcentration must be > 0.")
+
+    if rngSeed is not None:
+        _CheckNonnegativeInt(rngSeed, "RNG seed")
 
 
 def _ValidateTrain(
     framework,
+    trainIndices,
+    TrainLikelihoodFn,
     numWarmup,
     numSamples,
     num_chains,
     acceptProb,
     dense_mass,
     medianSamples,
-    rngKey,
+    printSummary,
+    rngSeed,
 ):
-    if framework._trainData is None:
-        raise RuntimeError(
-            "Training data have not been set. "
-            "Call SetTrainIndices() before Train()."
-        )
+    _CheckIndices(
+        trainIndices,
+        len(framework._modelDataFull[next(iter(framework._modelDataFull))]),
+        "trainIndices",
+    )
 
+    _CheckCallable(TrainLikelihoodFn, "TrainLikelihoodFn", 4, optional=False)
     _CheckNonnegativeInt(numWarmup, "numWarmup")
     _CheckPositiveInt(numSamples, "numSamples")
     _CheckPositiveInt(num_chains, "num_chains")
     _CheckProbability(acceptProb, "acceptProb")
     _CheckBool(dense_mass, "dense_mass")
     _CheckPositiveInt(medianSamples, "medianSamples")
-    _CheckRNGKey(rngKey, "rngKey")
+    _CheckBool(printSummary, "printSummary")
+    _CheckRngAvailable(framework, rngSeed)
 
 
 def _ValidateTest(
     framework,
+    testIndices,
     TestLikelihoodFn,
     nPosteriorSamples,
     numWarmup,
@@ -190,30 +166,23 @@ def _ValidateTest(
     acceptProb,
     dense_mass,
     medianSamples,
-    rngKey,
     nTrajectorySamples,
+    printSummary,
+    rngSeed,
 ):
-    # ================================================================
-    # Framework state
-    # ================================================================
+    if framework._trainPost is None:
+        raise RuntimeError("Train() must be run before Test().")
 
-    if framework._trainMCMC is None:
-        raise RuntimeError("Train must be run before Test().")
+    _CheckIndices(
+        testIndices,
+        len(framework._modelDataFull[next(iter(framework._modelDataFull))]),
+        "testIndices",
+    )
 
-    if framework._testData is None:
-        raise RuntimeError(
-            "Testing data have not been set. "
-            "Call SetTestIndices() before Test()."
-        )
-
-    _CheckRNGKey(rngKey, "rngKey")
-
-    # ================================================================
-    # No-MCMC testing
-    # ================================================================
+    _CheckBool(printSummary, "printSummary")
+    _CheckRngAvailable(framework, rngSeed)
 
     if TestLikelihoodFn is None:
-
         if nTrajectorySamples is None:
             raise ValueError(
                 "nTrajectorySamples must be provided when "
@@ -234,12 +203,7 @@ def _ValidateTest(
     # MCMC testing
     # ================================================================
 
-    _CheckCallable(
-        TestLikelihoodFn,
-        "TestLikelihoodFn",
-        4,
-        optional=False,
-    )
+    _CheckCallable(TestLikelihoodFn, "TestLikelihoodFn", 4, optional=False)
 
     if nTrajectorySamples is not None:
         raise ValueError(
@@ -258,101 +222,22 @@ def _ValidateTest(
     _CheckPositiveInt(medianSamples, "medianSamples")
 
 
-def _ValidateSetTrainIndices(
-    framework,
-    indices,
-):
-    _CheckIndices(
-        indices,
-        len(framework._modelDataFull[
-            next(iter(framework._modelDataFull))
-        ]),
-        "indices",
-    )
+def _ValidateScoreTrain(framework, ScoreFn):
+    if framework._trainPost is None:
+        raise RuntimeError("Train() must be run before ScoreTrain().")
+
+    _CheckCallable(ScoreFn, "ScoreFn", 2, optional=False)
 
 
-def _ValidateSetTestIndices(
-    framework,
-    indices,
-):
-    _CheckIndices(
-        indices,
-        len(framework._modelDataFull[
-            next(iter(framework._modelDataFull))
-        ]),
-        "indices",
-    )
+def _ValidateScoreTest(framework, ScoreFn):
+    if framework._testPost is None and framework._testNoMCMC is None:
+        raise RuntimeError("Test() must be run before ScoreTest().")
 
+    _CheckCallable(ScoreFn, "ScoreFn", 2, optional=False)
 
-def _ValidateScoreTrain(
-    framework,
-    ScoreFn,
-    nSamples,
-    RNGkey,
-):
-    if framework._trainMCMC is None:
-        raise RuntimeError(
-            "Train() must be run before ScoreTrain()."
-        )
+def _ValidateSetRng(rngSeed):
+    _CheckNonnegativeInt(rngSeed, "RNG seed")
 
-    _CheckCallable(
-        ScoreFn,
-        "ScoreFn",
-        2,
-        optional=False,
-    )
-
-    _CheckPositiveInt(nSamples, "nSamples")
-    _CheckRNGKey(RNGkey, "RNGkey")
-
-
-def _ValidateScoreTest(
-    framework,
-    ScoreFn,
-    nSamples,
-    RNGkey,
-):
-    if framework._testData is None:
-        raise RuntimeError(
-            "Testing data have not been set."
-        )
-
-    if (
-        framework._testMCMC is None
-        and framework._testNoMCMC is None
-    ):
-        raise RuntimeError(
-            "Test() must be run before ScoreTest()."
-        )
-
-    _CheckCallable(
-        ScoreFn,
-        "ScoreFn",
-        2,
-        optional=False,
-    )
-
-    _CheckPositiveInt(nSamples, "nSamples")
-    _CheckRNGKey(RNGkey, "RNGkey")
-
-
-def _ValidatePrintTrainSummary(
-    framework,
-):
-    if framework._trainMCMC is None:
-        raise RuntimeError(
-            "Train() must be run before PrintTrainSummary()."
-        )
-
-
-def _ValidatePrintTestSummary(
-    framework,
-):
-    if framework._testMCMC is None:
-        raise RuntimeError(
-            "Test() must be run with a TestLikelihoodFn before "
-            "PrintTestSummary()."
-        )
 
 
 # ====================================================================
@@ -360,7 +245,6 @@ def _ValidatePrintTestSummary(
 # ====================================================================
 
 def _CheckCallable(fn, name, nArgs, optional=False):
-
     if fn is None:
         if optional:
             return
@@ -393,14 +277,11 @@ def _CheckPositiveInt(value, name):
         (int, np.integer),
     ):
         raise TypeError(
-            f"{name} must be an integer; "
-            f"got {type(value).__name__}."
+            f"{name} must be an integer; got {type(value).__name__}."
         )
 
     if value <= 0:
-        raise ValueError(
-            f"{name} must be > 0."
-        )
+        raise ValueError(f"{name} must be > 0.")
 
 
 def _CheckNonnegativeInt(value, name):
@@ -409,14 +290,11 @@ def _CheckNonnegativeInt(value, name):
         (int, np.integer),
     ):
         raise TypeError(
-            f"{name} must be an integer; "
-            f"got {type(value).__name__}."
+            f"{name} must be an integer; got {type(value).__name__}."
         )
 
     if value < 0:
-        raise ValueError(
-            f"{name} must be >= 0."
-        )
+        raise ValueError(f"{name} must be >= 0.")
 
 
 def _CheckProbability(value, name):
@@ -425,69 +303,42 @@ def _CheckProbability(value, name):
         (int, float, np.integer, np.floating),
     ):
         raise TypeError(
-            f"{name} must be a real number; "
-            f"got {type(value).__name__}."
+            f"{name} must be a real number; got {type(value).__name__}."
         )
 
     if not np.isfinite(value):
-        raise ValueError(
-            f"{name} must be finite."
-        )
+        raise ValueError(f"{name} must be finite.")
 
     if not 0 < value < 1:
-        raise ValueError(
-            f"{name} must be between 0 and 1."
-        )
+        raise ValueError(f"{name} must be between 0 and 1.")
 
 
 def _CheckBool(value, name):
     if not isinstance(value, (bool, np.bool_)):
         raise TypeError(
-            f"{name} must be bool; "
-            f"got {type(value).__name__}."
+            f"{name} must be bool; got {type(value).__name__}."
         )
 
 
-def _CheckRNGKey(key, name):
-    try:
-        jax.random.key_data(key)
-    except Exception as e:
-        raise TypeError(
-            f"{name} must be a valid JAX random key."
-        ) from e
-
-
 def _CheckIndices(indices, dataSize, name):
-    if not isinstance(
-        indices,
-        (list, tuple, np.ndarray, jax.Array),
-    ):
+    if not isinstance(indices, (list, tuple, np.ndarray, jax.Array)):
         raise TypeError(
-            f"{name} must be a list, tuple, NumPy array, "
-            "or JAX array."
+            f"{name} must be a list, tuple, NumPy array, or JAX array."
         )
 
     arr = np.asarray(indices)
 
     if arr.ndim != 1:
-        raise ValueError(
-            f"{name} must be one-dimensional."
-        )
+        raise ValueError(f"{name} must be one-dimensional.")
 
     if len(arr) == 0:
-        raise ValueError(
-            f"{name} cannot be empty."
-        )
+        raise ValueError(f"{name} cannot be empty.")
 
     if not np.issubdtype(arr.dtype, np.integer):
-        raise TypeError(
-            f"{name} must contain integers."
-        )
+        raise TypeError(f"{name} must contain integers.")
 
     if np.any(arr < 0):
-        raise ValueError(
-            f"{name} cannot contain negative indices."
-        )
+        raise ValueError(f"{name} cannot contain negative indices.")
 
     if np.any(arr >= dataSize):
         raise IndexError(
@@ -496,6 +347,16 @@ def _CheckIndices(indices, dataSize, name):
         )
 
     if len(np.unique(arr)) != len(arr):
+        raise ValueError(f"{name} cannot contain duplicate indices.")
+
+
+def _CheckRngAvailable(framework, rngSeed):
+    if rngSeed is not None:
+        _CheckNonnegativeInt(rngSeed, "RNG seed")
+        return
+
+    if framework._key is None:
         raise ValueError(
-            f"{name} cannot contain duplicate indices."
+            "An RNG seed must be provided either when constructing the "
+            "framework, via SetRng(), or for this call."
         )
