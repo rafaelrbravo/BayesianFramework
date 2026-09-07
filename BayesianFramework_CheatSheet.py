@@ -31,6 +31,12 @@ PURPOSE = (
 
 DEPENDENCIES = "jax, numpyro, numpy, cloudpickle"
 
+INSTALLATION = (
+    "From the BayesianFramework repository folder, install in editable mode with "
+    "`pip install -e .`, then import with `from BayesianFramework import BayesianFramework`. "
+    "Editable installation means updates pulled into the repository are available without reinstalling."
+)
+
 CONVENTIONS = [
     ("`arg{}`", "dictionary whose values have no entry dimension; used for one entry's data, local parameters, or model output, and for global parameters or other unbatched named values."),
     ("`arg{[]}`", "dictionary containing arrays spanning multiple entries; returned model outputs may also include a leading posterior/sample dimension."),
@@ -195,7 +201,7 @@ def _build_pdf(body_font):
     convention_lines = [f"<b>{_markup(symbol)}</b> - {_markup(description)}" for symbol, description in CONVENTIONS]
 
     story = [
-        Paragraph("<b>Purpose:</b> " + _markup(PURPOSE) + "<br/><b>Dependencies:</b> " + _markup(DEPENDENCIES), purpose_style),
+        Paragraph("<b>Purpose:</b> " + _markup(PURPOSE) + "<br/><b>Dependencies:</b> " + _markup(DEPENDENCIES) + "<br/><b>Installation:</b> " + _markup(INSTALLATION), purpose_style),
         Paragraph("Conventions", heading_style),
         Paragraph("<br/>".join(convention_lines), conventions_style),
         Paragraph("User-Facing Functions", heading_style),
