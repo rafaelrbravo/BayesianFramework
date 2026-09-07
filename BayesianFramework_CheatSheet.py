@@ -60,12 +60,12 @@ FUNCTIONS = [
         "Evaluates the trained model on entries selected by **testIndices**. If **TestLikelihoodFn** is omitted, no test MCMC is run: globals are drawn from the training posterior, new locals are sampled from their population distribution, and **nTrajectorySamples** trajectories are generated. If **TestLikelihoodFn** is provided, test MCMC infers the test-entry locals conditional on globals from the training posterior; **nPosteriorSamples** is an optional positive integer controlling how many training-posterior global states are tested. **numWarmup**, **numSamples**, **num_chains**, and **medianSamples** are positive integers; **acceptProb** is a probability; **dense_mass** and **printSummary** are booleans. **nTrajectorySamples** is an optional positive integer controlling the number of generated trajectories. **rngSeed** is an optional nonnegative integer that overrides the persistent RNG for this call without advancing the persistent RNG state. **Returns:** sampled `modelOut{[]}` without MCMC, or a list of NumPyro `MCMC` objects with MCMC.",
     ),
     (
-        "ScoreTrain(ScoreFn(modelOut{}, data{}) -> score | score{}) -> scores | scores{[]}",
-        "Scores stored training predictions. **ScoreFn** evaluates one entry and may return either a single score or a score dictionary. A single score produces an array over posterior samples and training entries; a dictionary produces the same dictionary structure with each value vectorized over those dimensions.",
+        "ScoreTrain(ScoreFn(modelOut{}, data{}) -> score{}) -> scores{[]}",
+        "Scores stored training predictions. **ScoreFn** evaluates one entry and may return a single value, an array, or a dictionary of values/arrays. `ScoreTrain()` applies it to every posterior sample and training entry and collects the results.",
     ),
     (
-        "ScoreTest(ScoreFn(modelOut{}, data{}) -> score | score{}) -> scores | scores{[]}",
-        "Scores the most recent test predictions. **ScoreFn** evaluates one entry and may return either a single score or a score dictionary. A single score produces an array over posterior samples and test entries; a dictionary produces the same dictionary structure with each value vectorized over those dimensions.",
+        "ScoreTest(ScoreFn(modelOut{}, data{}) -> score{}) -> scores{[]}",
+        "Scores the most recent test predictions. **ScoreFn** evaluates one entry and may return a single value, an array, or a dictionary of values/arrays. `ScoreTest()` applies it to every sample and test entry and collects the results.",
     ),
     (
         "GetTrainModelOutput() -> modelOut{[]}",
@@ -204,7 +204,7 @@ def _build_pdf(body_font):
         Paragraph("<b>Purpose:</b> " + _markup(PURPOSE) + "<br/><b>Dependencies:</b> " + _markup(DEPENDENCIES) + "<br/><b>Installation:</b> " + _markup(INSTALLATION), purpose_style),
         Paragraph("Conventions", heading_style),
         Paragraph("<br/>".join(convention_lines), conventions_style),
-        Paragraph("User-Facing Functions", heading_style),
+        Paragraph("Main Functions", heading_style),
     ]
 
     for signature, description in FUNCTIONS:
