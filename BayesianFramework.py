@@ -7,6 +7,8 @@ from .OutputUtils import _PrintSummary,_PrintTestSummary,_GetRecord
 import jax.numpy as jnp
 import cloudpickle
 from pprint import pprint
+import jax
+import gc
 
 class BayesianFramework():
     def __init__(self,modelDataFull,ModelFn,localParamNames=None,GlobalParamFn=None,choleskyConcentration=2.0,rngSeed=None):
@@ -42,6 +44,7 @@ class BayesianFramework():
         self._testNoMCMC=None
         self._testParams=None
         if printSummary: self._PrintTrainSummary(mcmc)
+        self._ClearJAX()
         return mcmc
 
     def Test(self,testIndices,TestLikelihoodFn=None,nPosteriorSamples=None,numWarmup=2000,numSamples=2000,num_chains=4,acceptProb=0.95,dense_mass=False,medianSamples=50,nTrajectorySamples=None,printSummary=False,rngSeed=None):
@@ -109,6 +112,7 @@ class BayesianFramework():
             mcmc=MCMC(kernel,num_warmup=numWarmup,num_samples=numSamples, num_chains=num_chains,chain_method="parallel")
             mcmc.run(runKey,TestLikelihoodFn,posteriors, extra_fields=("num_steps","accept_prob"), **testData)
             self._testPost=[mcmc.get_samples(group_by_chain=False)]
+            self._ClearJAX()
             return [mcmc]
         mcmcs=[]
         runKeys = random.split(runKey, nPosteriorSamples)
@@ -118,6 +122,7 @@ class BayesianFramework():
             mcmc.run(runKeys[i],TestLikelihoodFn,posterior, extra_fields=("num_steps","accept_prob"), **testData)
             mcmcs.append(mcmc)
         self._testPost=[m.get_samples(group_by_chain=False) for m in mcmcs]
+        self._ClearJAX()
         return mcmcs
 
     def _TestNoMCMC(self,nSamples,rngSeed=None):
@@ -202,3 +207,7 @@ class BayesianFramework():
 
     def _GetTestData(self):
         return { k: v[self._testIndices] for k, v in self._modelDataFull.items() }
+
+    def _ClearJAX(self):
+        jax.clear_caches()
+        gc.collect()
