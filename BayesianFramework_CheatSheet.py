@@ -32,9 +32,10 @@ PURPOSE = (
 DEPENDENCIES = "jax, numpyro, numpy, cloudpickle"
 
 INSTALLATION = (
-    "From the BayesianFramework repository folder, install in editable mode with "
-    "`pip install -e .`, then import with `from BayesianFramework import BayesianFramework`. "
-    "Editable installation means updates pulled into the repository are available without reinstalling."
+    "Install in editable mode with `pip install -e \"/path/to/BayesianFramework\"` then import with "
+    "`from BayesianFramework import BayesianFramework`. Editable installation means updates pulled into "
+    "the repository are available without reinstalling. If using VS Code and the import is not recognized "
+    "by autocomplete, add `\"python.analysis.extraPaths\": [\"/path/to/BayesianFramework\"]` to settings.json."
 )
 
 CONVENTIONS = [

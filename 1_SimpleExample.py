@@ -7,7 +7,7 @@ from jax import random
 from jax.experimental.ode import odeint
 
 # Workaround to run this example directly from the repository without installing BayesianFramework.
-# For normal use, install from the repository folder with `pip install -e .` and import with `from BayesianFramework import BayesianFramework`.
+# For normal use, install from the repository folder with `python -m pip install -e .` and import with `from BayesianFramework import BayesianFramework`.
 import sys
 from pathlib import Path
 if __package__ is None or __package__ == "":

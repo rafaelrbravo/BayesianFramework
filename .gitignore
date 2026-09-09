@@ -1,1 +1,10 @@
 *.pyc
+# Python packaging
+*.egg-info/
+*.egg
+build/
+dist/
+
+# Python cache
+__pycache__/
+*.py[cod]
