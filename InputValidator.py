@@ -1,7 +1,9 @@
+from __future__ import annotations
 import inspect
 import numpy as np
 import jax
-
+from typing import TYPE_CHECKING
+if TYPE_CHECKING: from BayesianFramework import BayesianFramework
 
 # ====================================================================
 # Public method validators
@@ -137,6 +139,8 @@ def _ValidateTrain(
     medianSamples,
     printSummary,
     rngSeed,
+    saveLocals,
+    saveModelOut,
 ):
     _CheckIndices(
         trainIndices,
@@ -152,6 +156,8 @@ def _ValidateTrain(
     _CheckBool(dense_mass, "dense_mass")
     _CheckPositiveInt(medianSamples, "medianSamples")
     _CheckBool(printSummary, "printSummary")
+    _CheckBool(saveLocals, "saveLocals")
+    _CheckBool(saveModelOut, "saveModelOut")
     _CheckRngAvailable(framework, rngSeed)
 
 
@@ -159,19 +165,22 @@ def _ValidateTest(
     framework,
     testIndices,
     TestLikelihoodFn,
-    nPosteriorSamples,
+    nGlobalSamples,
     numWarmup,
     numSamples,
     num_chains,
     acceptProb,
     dense_mass,
     medianSamples,
-    nTrajectorySamples,
     printSummary,
     rngSeed,
+    saveModelOut,
 ):
-    if framework._trainPost is None:
+    if framework._trainParams is None:
         raise RuntimeError("Train() must be run before Test().")
+
+    if not framework._localParamNames:
+        raise RuntimeError("Test() requires at least one local parameter.")
 
     _CheckIndices(
         testIndices,
@@ -179,65 +188,59 @@ def _ValidateTest(
         "testIndices",
     )
 
-    _CheckBool(printSummary, "printSummary")
-    _CheckRngAvailable(framework, rngSeed)
+    _CheckCallable(TestLikelihoodFn, "TestLikelihoodFn", 4, optional=True)
 
-    if TestLikelihoodFn is None:
-        if nTrajectorySamples is None:
-            raise ValueError(
-                "nTrajectorySamples must be provided when "
-                "TestLikelihoodFn is None."
-            )
+    if nGlobalSamples is not None:
+        _CheckPositiveInt(nGlobalSamples, "nGlobalSamples")
 
-        _CheckPositiveInt(nTrajectorySamples, "nTrajectorySamples")
-
-        if nPosteriorSamples is not None:
-            raise ValueError(
-                "nPosteriorSamples cannot be used when "
-                "TestLikelihoodFn is None."
-            )
-
-        return
-
-    # ================================================================
-    # MCMC testing
-    # ================================================================
-
-    _CheckCallable(TestLikelihoodFn, "TestLikelihoodFn", 4, optional=False)
-
-    if nTrajectorySamples is not None:
-        raise ValueError(
-            "nTrajectorySamples cannot be used when "
-            "TestLikelihoodFn is provided."
-        )
-
-    if nPosteriorSamples is not None:
-        _CheckPositiveInt(nPosteriorSamples, "nPosteriorSamples")
-
-    _CheckNonnegativeInt(numWarmup, "numWarmup")
     _CheckPositiveInt(numSamples, "numSamples")
     _CheckPositiveInt(num_chains, "num_chains")
-    _CheckProbability(acceptProb, "acceptProb")
-    _CheckBool(dense_mass, "dense_mass")
-    _CheckPositiveInt(medianSamples, "medianSamples")
+    _CheckBool(printSummary, "printSummary")
+    _CheckBool(saveModelOut, "saveModelOut")
+    _CheckRngAvailable(framework, rngSeed)
+
+    if TestLikelihoodFn is not None:
+        _CheckNonnegativeInt(numWarmup, "numWarmup")
+        _CheckProbability(acceptProb, "acceptProb")
+        _CheckBool(dense_mass, "dense_mass")
+        _CheckPositiveInt(medianSamples, "medianSamples")
 
 
-def _ValidateScoreTrain(framework, ScoreFn):
-    if framework._trainPost is None:
+def _ValidateScoreTrain(framework, ScoreFn, nSamples, rngSeed):
+    if framework._trainParams is None:
         raise RuntimeError("Train() must be run before ScoreTrain().")
 
     _CheckCallable(ScoreFn, "ScoreFn", 2, optional=False)
 
+    if nSamples is not None:
+        _CheckPositiveInt(nSamples, "nSamples")
+        _CheckRngAvailable(framework, rngSeed)
 
-def _ValidateScoreTest(framework, ScoreFn):
-    if framework._testPost is None and framework._testNoMCMC is None:
+    if (
+        framework._trainModelOut is None
+        and framework._localParamNames
+        and not framework._trainLocals
+    ):
+        raise RuntimeError(
+            "ScoreTrain() requires saved training locals or saved "
+            "training model outputs when the model has local parameters."
+        )
+
+
+def _ValidateScoreTest(framework,ScoreFn,nSamples,rngSeed):
+    if framework._testParams is None:
         raise RuntimeError("Test() must be run before ScoreTest().")
 
-    _CheckCallable(ScoreFn, "ScoreFn", 2, optional=False)
+    if framework._testModelOut is None and not framework._testLocals:
+        raise RuntimeError(
+            "ScoreTest() requires saved test locals or saved test model outputs."
+        )
 
-def _ValidateSetRng(rngSeed):
-    _CheckNonnegativeInt(rngSeed, "RNG seed")
+    _CheckCallable(ScoreFn,"ScoreFn",2,optional=False)
 
+    if nSamples is not None:
+        _CheckPositiveInt(nSamples,"nSamples")
+        _CheckRngAvailable(framework,rngSeed)
 
 
 # ====================================================================
@@ -358,5 +361,5 @@ def _CheckRngAvailable(framework, rngSeed):
     if framework._key is None:
         raise ValueError(
             "An RNG seed must be provided either when constructing the "
-            "framework, via SetRng(), or for this call."
+            "framework or for this call."
         )

@@ -23,13 +23,20 @@ one US Letter page.
 TITLE = "BayesianFramework Cheat Sheet"
 
 PURPOSE = (
-    "`BayesianFramework` provides a compact interface for hierarchical Bayesian "
-    "modeling with NumPyro, including global parameters, optional correlated "
-    "entry-level local parameters, MCMC training, held-out prediction, test-time "
-    "local inference, scoring, reproducible RNG control, and persistence."
+    "`BayesianFramework` makes it easier to build, train, and evaluate hierarchical Bayesian models for data "
+    "containing multiple related entries. A model can contain parameters shared across all entries, called global "
+    "parameters, as well as local parameters that vary between entries. `Train` uses training data to infer the "
+    "global parameters, the local parameters of the training entries, and the relationships among local parameters. "
+    "`Test` carries the inferred global parameters and local-parameter relationships forward to new entries, using "
+    "them to infer new local parameters either from the training results alone or by incorporating observations from "
+    "the new entries. `ScoreTrain` and `ScoreTest` evaluate how well the resulting model predictions match the data. "
+    "`Save` preserves the inferred model state so that potentially expensive training or testing does not need to be "
+    "repeated, while `Load` restores that state for further testing, scoring, or analysis. The user defines the "
+    "mathematical model and likelihoods, while the framework handles the Bayesian inference and organization needed "
+    "to train, test, score, save, and reuse the model."
 )
 
-DEPENDENCIES = "jax, numpyro, numpy, cloudpickle"
+DEPENDENCIES = "jax, numpyro, numpy"
 
 INSTALLATION = (
     "Install in editable mode with `pip install -e \"/path/to/BayesianFramework\"` then import with "
@@ -40,7 +47,7 @@ INSTALLATION = (
 
 CONVENTIONS = [
     ("`arg{}`", "dictionary whose values have no entry dimension; used for one entry's data, local parameters, or model output, and for global parameters or other unbatched named values."),
-    ("`arg{[]}`", "dictionary containing arrays spanning multiple entries; returned model outputs may also include a leading posterior/sample dimension."),
+    ("`arg{[]}`", "dictionary containing arrays spanning multiple entries or samples."),
     ("`arg[]`", "1D sequence."),
     ("`Fn(...) -> value`", "function argument or method together with the value it returns."),
     ("`A | B`", "either input/return type A or input/return type B, depending on behavior."),
@@ -50,47 +57,61 @@ CONVENTIONS = [
 FUNCTIONS = [
     (
         "BayesianFramework(modelDataFull{[]}, ModelFn(globalParams{}, localParams{}, data{}) -> modelOut{}, *localParamNames[]*, *GlobalParamFn(dataShapes{}) -> globalParams{}*, choleskyConcentration, *rngSeed*) -> BayesianFramework",
-        "Creates a framework object. **modelDataFull** contains the full dataset. **ModelFn** evaluates one entry. **localParamNames** optionally defines standardized entry-level parameters; when multiple locals are present, their correlation is learned with an LKJ prior controlled by **choleskyConcentration**, a positive number. **GlobalParamFn** optionally receives a dictionary of full-data array shapes and defines model-facing global parameters. **rngSeed** is an optional nonnegative integer that initializes the persistent RNG state used by calls that do not provide their own seed. **Returns:** a new `BayesianFramework` object.",
+        "Creates a framework object. **modelDataFull** contains the full dataset. **ModelFn** evaluates one entry. "
+        "**localParamNames** optionally defines standardized entry-level parameters; when multiple locals are present, "
+        "their correlation is learned with an LKJ prior controlled by **choleskyConcentration**, a positive number. "
+        "**GlobalParamFn** optionally receives a dictionary of full-data array shapes and defines model-facing global "
+        "parameters. **rngSeed** is an optional nonnegative integer that initializes the persistent RNG state. "
+        "Stochastic operations advance this state; supplying **rngSeed** to a later call resets it before that operation. "
+        "**Returns:** a new `BayesianFramework` object.",
     ),
     (
-        "Train(trainIndices[], TrainLikelihoodFn(globalParams{}, localParams{[]}, data{[]}, modelOut{[]}), numWarmup, numSamples, num_chains, acceptProb, dense_mass, medianSamples, printSummary, *rngSeed*) -> MCMC",
-        "Fits the entries selected by **trainIndices** using NUTS MCMC. **TrainLikelihoodFn** defines the likelihood from the globals, locals, selected data, and model output. **numWarmup**, **numSamples**, **num_chains**, and **medianSamples** are positive integers; **acceptProb** is a probability; **dense_mass** and **printSummary** are booleans. **rngSeed** is an optional nonnegative integer that overrides the persistent RNG for this call without advancing the persistent RNG state. **Returns:** the NumPyro `MCMC` object.",
+        "Train(trainIndices[], TrainLikelihoodFn(globalParams{}, localParams{[]}, data{[]}, modelOut{[]}), numWarmup, numSamples, num_chains, acceptProb, dense_mass, medianSamples, printSummary, *rngSeed*, saveLocals, saveModelOut) -> MCMC",
+        "Fits the entries selected by **trainIndices** using NUTS MCMC. **TrainLikelihoodFn** defines the likelihood from "
+        "the globals, locals, selected data, and model output. **numWarmup**, **numSamples**, **num_chains**, and "
+        "**medianSamples** control MCMC; **acceptProb** is a probability; **dense_mass**, **printSummary**, **saveLocals**, "
+        "and **saveModelOut** are booleans. **rngSeed** optionally resets the persistent RNG state before this call. "
+        "**saveLocals** stores transformed training-local posterior samples; **saveModelOut** caches model outputs. "
+        "**Returns:** the NumPyro `MCMC` object.",
     ),
     (
-        "Test(testIndices[], *TestLikelihoodFn(globalParams{}, localParams{[]}, data{[]}, modelOut{[]})*, *nPosteriorSamples*, numWarmup, numSamples, num_chains, acceptProb, dense_mass, medianSamples, *nTrajectorySamples*, printSummary, *rngSeed*) -> modelOut{[]} | MCMC[]",
-        "Evaluates the trained model on entries selected by **testIndices**. If **TestLikelihoodFn** is omitted, no test MCMC is run: globals are drawn from the training posterior, new locals are sampled from their population distribution, and **nTrajectorySamples** trajectories are generated. If **TestLikelihoodFn** is provided, test MCMC infers the test-entry locals conditional on globals from the training posterior; **nPosteriorSamples** is an optional positive integer controlling how many training-posterior global states are tested. **numWarmup**, **numSamples**, **num_chains**, and **medianSamples** are positive integers; **acceptProb** is a probability; **dense_mass** and **printSummary** are booleans. **nTrajectorySamples** is an optional positive integer controlling the number of generated trajectories. **rngSeed** is an optional nonnegative integer that overrides the persistent RNG for this call without advancing the persistent RNG state. **Returns:** sampled `modelOut{[]}` without MCMC, or a list of NumPyro `MCMC` objects with MCMC.",
+        "Test(testIndices[], *TestLikelihoodFn(globalParams{}, localParams{[]}, data{[]}, modelOut{[]})*, *nGlobalSamples*, numSamples, num_chains, numWarmup, acceptProb, dense_mass, medianSamples, printSummary, *rngSeed*, saveModelOut) -> None | MCMC[]",
+        "Evaluates the trained model on **testIndices**. **nGlobalSamples=None** uses the median training-global posterior "
+        "state; a positive integer samples that many training-global states. Without **TestLikelihoodFn**, no test MCMC is "
+        "run: **numSamples** local samples are drawn per global state and stored for later scoring. With **TestLikelihoodFn**, "
+        "one test MCMC is run per global state; **numSamples** is samples per chain and **num_chains** is the chain count. "
+        "**numWarmup**, **acceptProb**, **dense_mass**, and **medianSamples** apply only to MCMC testing. **printSummary** "
+        "prints MCMC summaries only. **rngSeed** optionally resets the persistent RNG state before this call. "
+        "**saveModelOut** optionally caches test model outputs. **Returns:** `None` without MCMC, otherwise a list of "
+        "NumPyro `MCMC` objects.",
     ),
     (
-        "ScoreTrain(ScoreFn(modelOut{}, data{}) -> score{}) -> scores{[]}",
-        "Scores stored training predictions. **ScoreFn** evaluates one entry and may return a single value, an array, or a dictionary of values/arrays. `ScoreTrain()` applies it to every posterior sample and training entry and collects the results.",
+        "ScoreTrain(ScoreFn(modelOut{}, data{}) -> score{}, *nSamples*, *rngSeed*) -> scores{[]}",
+        "Scores training trajectories. **ScoreFn** evaluates one entry and may return a scalar, array, or dictionary. "
+        "**nSamples=None** scores all available joint training-posterior samples; otherwise that many posterior samples are "
+        "selected using **rngSeed** or the persistent RNG. Saved model outputs are used when available; otherwise outputs are "
+        "regenerated from saved posterior parameters. **Returns:** scores with leading posterior-sample and training-entry dimensions.",
     ),
     (
-        "ScoreTest(ScoreFn(modelOut{}, data{}) -> score{}) -> scores{[]}",
-        "Scores the most recent test predictions. **ScoreFn** evaluates one entry and may return a single value, an array, or a dictionary of values/arrays. `ScoreTest()` applies it to every sample and test entry and collects the results.",
+        "ScoreTest(ScoreFn(modelOut{}, data{}) -> score{}, *nSamples*, *rngSeed*) -> scores{[]}",
+        "Scores the most recent test state. **nSamples=None** scores all available local samples; otherwise that many local "
+        "samples are selected for every stored global sample using **rngSeed** or the persistent RNG. Saved model outputs are "
+        "used when available; otherwise outputs are regenerated from saved test globals and locals. **Returns:** scores with "
+        "leading global-sample, local-sample, and test-entry dimensions.",
     ),
     (
-        "GetTrainModelOutput() -> modelOut{[]}",
-        "Retrieves stored training model outputs. **Returns:** training model outputs with posterior-sample and entry dimensions.",
+        "Save(fileName, saveTrainLocals, saveTestLocals, saveTrainModelOut, saveTestModelOut, saveAllData) -> None",
+        "Writes framework state to a compressed NumPy `.npz` archive. Training globals and training Cholesky samples are "
+        "always saved. **saveTrainLocals** and **saveTestLocals** default to `True`; saved test locals include their associated "
+        "test-global and Cholesky state. **saveTrainModelOut**, **saveTestModelOut**, and **saveAllData** default to `False`. "
+        "Functions are not serialized.",
     ),
     (
-        "GetTestModelOutput() -> modelOut{[]}",
-        "Retrieves stored outputs from the most recent test. **Returns:** test model outputs with sample and entry dimensions.",
-    ),
-    (
-        "SetRng(rngSeed) -> None",
-        "Sets or resets the persistent RNG state using **rngSeed**, a nonnegative integer. Subsequent `Train()` and `Test()` calls use and advance this state unless they receive their own **rngSeed**; a call-specific seed overrides but does not advance the persistent state.",
-    ),
-    (
-        "GetRecord(print) -> record{}",
-        "Collects framework metadata; **print** is a boolean controlling whether it is pretty-printed. **Returns:** a dictionary containing parameter names, train/test indices, MCMC settings, RNG state, and function names.",
-    ),
-    (
-        "Save(fileName) -> None",
-        "Serializes the complete framework object, including trained state and functions, to **fileName**, a file-path string, using `cloudpickle`. Load only trusted saved files.",
-    ),
-    (
-        "BayesianFramework.Load(fileName) -> BayesianFramework",
-        "Loads an object previously written by `Save()`; **fileName** is a file-path string. **Returns:** the loaded `BayesianFramework` object.",
+        "BayesianFramework.Load(fileName, ModelFn, *GlobalParamFn*, *modelDataFull*) -> BayesianFramework",
+        "Loads framework state from a `.npz` file. **ModelFn** and optional **GlobalParamFn** are supplied explicitly rather "
+        "than deserialized; their names are checked against the saved metadata and mismatches produce warnings. "
+        "**modelDataFull** must be supplied unless the file was saved with `saveAllData=True`. "
+        "**Returns:** the reconstructed `BayesianFramework` object.",
     ),
 ]
 
