@@ -61,6 +61,7 @@ class BayesianFramework():
         self._testParams=None
         self._testIndices=None
         if printSummary: self._PrintTrainSummary(mcmc)
+        jax.block_until_ready(post)
         self._ClearJAX()
         return mcmc
 
@@ -142,6 +143,7 @@ class BayesianFramework():
             mcmcs.append(mcmc)
         self._testLocals={name:jnp.stack([p[name] for p in localPosts]) for name in localPosts[0]}
         if saveModelOut: self._testModelOut={name:jnp.stack([p[name] for p in modelOutPosts]) for name in modelOutPosts[0]}
+        jax.block_until_ready((self._testLocals, self._testModelOut))
         self._ClearJAX()
         return mcmcs
 
