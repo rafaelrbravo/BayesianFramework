@@ -2,7 +2,7 @@ import numpyro as npo
 import numpyro.distributions as dist
 from jax import random, vmap
 from numpyro.infer import init_to_median,NUTS,MCMC
-from .InputValidator import _ValidateInit, _ValidateTrain, _ValidateTest, _ValidateScoreTrain, _ValidateScoreTest, _ValidateSetRng
+from .InputValidator import _ValidateInit, _ValidateTrain, _ValidateTest, _ValidateScoreTrain, _ValidateScoreTest
 from .OutputUtils import _PrintSummary,_PrintTestSummary,_Save,_Load
 import jax.numpy as jnp
 from pprint import pprint
