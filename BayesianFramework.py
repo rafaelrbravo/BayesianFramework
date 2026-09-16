@@ -2,14 +2,15 @@ import numpyro as npo
 import numpyro.distributions as dist
 from jax import random, vmap
 from numpyro.infer import init_to_median,NUTS,MCMC
-from .InputValidator import _ValidateInit, _ValidateTrain, _ValidateTest, _ValidateScoreTrain, _ValidateScoreTest
-from .OutputUtils import _PrintSummary,_PrintTestSummary,_Save,_Load
+from .InputValidator import _ValidateInit, _ValidateTrain, _ValidateTest, _ValidateScoreTrain, _ValidateScoreTest, _ValidateSave, _ValidateLoad
+from .OutputUtils import _PrintSummary,_PrintTestSummary,_Save,_Load,_LoadToDict
 import jax.numpy as jnp
 from pprint import pprint
 import jax
 import gc
 import functools
 import numpy as np
+from pathlib import Path
 
 class BayesianFramework():
     def __init__(self,modelDataFull,ModelFn,localParamNames=None,GlobalParamFn=None,choleskyConcentration=2.0,rngSeed=None):
@@ -109,12 +110,18 @@ class BayesianFramework():
         return vmap( vmap( vmap(ScoreFn,in_axes=(0,0)), in_axes=(0,None)), in_axes=(0,None))(modelOut,data)
 
     def Save( self, fileName, saveTrainLocals=True, saveTestLocals=True, saveTrainModelOut=False, saveTestModelOut=False, saveAllData=False):
-        record=_Save( self, saveTrainLocals, saveTestLocals, saveTrainModelOut, saveTestModelOut, saveAllData)
+        _ValidateSave(fileName,saveTrainLocals,saveTestLocals,saveTrainModelOut,saveTestModelOut,saveAllData)
+        if fileName is None: return _Save( self, saveTrainLocals, saveTestLocals, saveTrainModelOut, saveTestModelOut, saveAllData, flatten=False)
+        record=_Save( self, saveTrainLocals, saveTestLocals, saveTrainModelOut, saveTestModelOut, saveAllData, flatten=True)
         np.savez_compressed(fileName,**record)
 
     @classmethod
-    def Load( cls, fileName, ModelFn, GlobalParamFn=None, modelDataFull=None):
-        return _Load( cls, fileName, ModelFn, GlobalParamFn, modelDataFull)
+    def Load(cls, fileName, ModelFn, GlobalParamFn=None, modelDataFull=None):
+        _ValidateLoad(fileName, ModelFn, GlobalParamFn, modelDataFull)
+        fileName = Path(fileName)
+        if fileName.suffix.lower() != ".npz": fileName = fileName.with_name(fileName.name + ".npz")
+        if ModelFn is None: return _LoadToDict(fileName)
+        return _Load(cls, fileName, ModelFn, GlobalParamFn, modelDataFull)
 
     def _PrintTrainSummary(self,mcmc): 
         _PrintSummary(mcmc,self._localParamNames,self._globalNames,"--= Training posterior summary =--")

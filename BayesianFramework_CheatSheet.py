@@ -100,18 +100,21 @@ FUNCTIONS = [
         "leading global-sample, local-sample, and test-entry dimensions.",
     ),
     (
-        "Save(fileName, saveTrainLocals, saveTestLocals, saveTrainModelOut, saveTestModelOut, saveAllData) -> None",
-        "Writes framework state to a compressed NumPy `.npz` archive. Training globals and training Cholesky samples are "
-        "always saved. **saveTrainLocals** and **saveTestLocals** default to `True`; saved test locals include their associated "
-        "test-global and Cholesky state. **saveTrainModelOut**, **saveTestModelOut**, and **saveAllData** default to `False`. "
-        "Functions are not serialized.",
+        "Save(*fileName*, saveTrainLocals, saveTestLocals, saveTrainModelOut, saveTestModelOut, saveAllData) -> None | record{}",
+        "Saves or returns framework state. When **fileName** is a path, the state is written to a compressed NumPy `.npz` "
+        "archive and the method returns `None`. When **fileName=None**, no file is written and the saved state is returned "
+        "as a nested dictionary. Training globals and training Cholesky samples are always included. **saveTrainLocals** "
+        "and **saveTestLocals** default to `True`; saved test locals include their associated test-global and Cholesky state. "
+        "**saveTrainModelOut**, **saveTestModelOut**, and **saveAllData** default to `False`. Functions are not serialized. "
+        "**Returns:** `None` when saving to a file, otherwise the nested saved-state dictionary.",
     ),
     (
-        "BayesianFramework.Load(fileName, ModelFn, *GlobalParamFn*, *modelDataFull*) -> BayesianFramework",
-        "Loads framework state from a `.npz` file. **ModelFn** and optional **GlobalParamFn** are supplied explicitly rather "
-        "than deserialized; their names are checked against the saved metadata and mismatches produce warnings. "
+        "BayesianFramework.Load(fileName, *ModelFn*, *GlobalParamFn*, *modelDataFull*) -> BayesianFramework | record{}",
+        "Loads framework state from a `.npz` file. When **ModelFn=None**, the saved state is returned as a nested dictionary "
+        "without reconstructing a framework. Otherwise, **ModelFn** and optional **GlobalParamFn** are supplied explicitly "
+        "rather than deserialized; their names are checked against the saved metadata and mismatches produce warnings. "
         "**modelDataFull** must be supplied unless the file was saved with `saveAllData=True`. "
-        "**Returns:** the reconstructed `BayesianFramework` object.",
+        "**Returns:** the nested saved-state dictionary when **ModelFn=None**, otherwise the reconstructed `BayesianFramework` object.",
     ),
 ]
 

@@ -92,12 +92,16 @@ def _PrintTestSummary(testMCMC,testGlobals,localParamNames):
             [],
         )
 
-def _AddInfo(record,prefix,info):
+def _AddInfo(record, prefix,flatten,info):
     if info is None:
         return
 
-    for name,value in info.items():
-        if not isinstance(name,str):
+    if not flatten:
+        record[prefix] = info
+        return
+
+    for name, value in info.items():
+        if not isinstance(name, str):
             raise TypeError(
                 f"Saved dictionary keys must be strings; got {type(name).__name__}."
             )
@@ -111,9 +115,9 @@ def _AddInfo(record,prefix,info):
             )
 
         if value is None:
-            record[f"{prefix}/{name}/__none__"]=np.asarray(True)
+            record[f"{prefix}/{name}/__none__"] = np.asarray(True)
         else:
-            record[f"{prefix}/{name}"]=np.asarray(value)
+            record[f"{prefix}/{name}"] = np.asarray(value)
 
 
 def _GetInfo(record,prefix):
@@ -153,11 +157,12 @@ def _Save(
     saveTrainModelOut=False,
     saveTestModelOut=False,
     saveAllData=False,
+    flatten=True
 ):
     record={}
 
     # Metadata
-    _AddInfo(record,"meta",{
+    _AddInfo(record,"meta",flatten,{
         "localParamNames":np.asarray(framework._localParamNames,dtype=str),
         "globalNames":(
             None
@@ -170,44 +175,44 @@ def _Save(
     })
 
     # General framework state
-    _AddInfo(record,"state",{
+    _AddInfo(record,"state",flatten,{
         "trainIndices":framework._trainIndices,
         "testIndices":framework._testIndices,
         "rngKey":framework._key,
     })
 
     # Run settings
-    _AddInfo(record,"trainParams",framework._trainParams)
-    _AddInfo(record,"testParams",framework._testParams)
+    _AddInfo(record,"trainParams",flatten,framework._trainParams)
+    _AddInfo(record,"testParams",flatten,framework._testParams)
 
     # Training globals are always saved
-    _AddInfo(record,"trainGlobals",framework._trainGlobals)
+    _AddInfo(record,"trainGlobals",flatten,framework._trainGlobals)
 
     if framework._trainCholesky is not None:
         record["trainCholesky"]=np.asarray(framework._trainCholesky)
 
     # Optional training locals
     if saveTrainLocals:
-        _AddInfo(record,"trainLocals",framework._trainLocals)
+        _AddInfo(record,"trainLocals",flatten,framework._trainLocals)
 
     # Test globals/cholesky are saved as context for test locals
     if saveTestLocals and framework._testLocals:
-        _AddInfo(record,"testGlobals",framework._testGlobals)
-        _AddInfo(record,"testLocals",framework._testLocals)
+        _AddInfo(record,"testGlobals",flatten,framework._testGlobals)
+        _AddInfo(record,"testLocals",flatten,framework._testLocals)
 
         if framework._testCholesky is not None:
             record["testCholesky"]=np.asarray(framework._testCholesky)
 
     # Optional cached model outputs
     if saveTrainModelOut and framework._trainModelOut is not None:
-        _AddInfo(record,"trainModelOut",framework._trainModelOut)
+        _AddInfo(record,"trainModelOut",flatten,framework._trainModelOut)
 
     if saveTestModelOut and framework._testModelOut is not None:
-        _AddInfo(record,"testModelOut",framework._testModelOut)
+        _AddInfo(record,"testModelOut",flatten,framework._testModelOut)
 
     # Optional original model data
     if saveAllData:
-        _AddInfo(record,"modelDataFull",framework._modelDataFull)
+        _AddInfo(record,"modelDataFull",flatten,framework._modelDataFull)
 
     return record
 
@@ -351,3 +356,37 @@ def _Load(
             )
 
     return framework
+
+def _LoadToDict(path):
+    with np.load(path, allow_pickle=False) as flat:
+        record = {}
+
+        for key, value in flat.items():
+            parts = key.split("/")
+
+            if len(parts) == 1:
+                record[key] = value.item() if value.ndim == 0 else value
+                continue
+
+            if len(parts) not in (2, 3):
+                raise ValueError(f"Invalid saved key '{key}'.")
+
+            prefix, name = parts[:2]
+
+            if not prefix or not name:
+                raise ValueError(f"Invalid saved key '{key}'.")
+
+            if len(parts) == 3 and parts[2] != "__none__":
+                raise ValueError(f"Invalid saved key '{key}'.")
+
+            if prefix not in record:
+                record[prefix] = {}
+
+            if len(parts) == 3:
+                record[prefix][name] = None
+            else:
+                record[prefix][name] = (
+                    value.item() if value.ndim == 0 else value
+                )
+
+    return record

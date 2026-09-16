@@ -1,9 +1,14 @@
 from __future__ import annotations
+
 import inspect
+import os
 import numpy as np
 import jax
 from typing import TYPE_CHECKING
-if TYPE_CHECKING: from BayesianFramework import BayesianFramework
+
+if TYPE_CHECKING:
+    from BayesianFramework import BayesianFramework
+
 
 # ====================================================================
 # Public method validators
@@ -21,46 +26,7 @@ def _ValidateInit(
     # modelDataFull
     # ================================================================
 
-    if not isinstance(modelDataFull, (dict, np.lib.npyio.NpzFile)):
-        raise TypeError("modelDataFull must be a dictionary.")
-
-    if len(modelDataFull) == 0:
-        raise ValueError("modelDataFull cannot be empty.")
-
-    dataSize = None
-
-    for name, value in modelDataFull.items():
-        if not isinstance(name, str):
-            raise TypeError(
-                f"modelDataFull keys must be strings; got {type(name).__name__}."
-            )
-
-        if not name:
-            raise ValueError("modelDataFull keys cannot be empty strings.")
-
-        if not isinstance(value, (jax.Array, np.ndarray)):
-            raise TypeError(
-                f"modelDataFull['{name}'] must be a JAX or NumPy array; "
-                f"got {type(value).__name__}."
-            )
-
-        if value.ndim == 0:
-            raise ValueError(
-                f"modelDataFull['{name}'] must have at least one dimension "
-                "because its first dimension represents data entries."
-            )
-
-        if dataSize is None:
-            dataSize = len(value)
-        elif len(value) != dataSize:
-            raise ValueError(
-                "All arrays in modelDataFull must have the same first "
-                f"dimension. Expected {dataSize}, but "
-                f"modelDataFull['{name}'] has length {len(value)}."
-            )
-
-    if dataSize == 0:
-        raise ValueError("modelDataFull must contain at least one data entry.")
+    _CheckModelData(modelDataFull)
 
     # ================================================================
     # Functions
@@ -227,7 +193,7 @@ def _ValidateScoreTrain(framework, ScoreFn, nSamples, rngSeed):
         )
 
 
-def _ValidateScoreTest(framework,ScoreFn,nSamples,rngSeed):
+def _ValidateScoreTest(framework, ScoreFn, nSamples, rngSeed):
     if framework._testParams is None:
         raise RuntimeError("Test() must be run before ScoreTest().")
 
@@ -236,16 +202,100 @@ def _ValidateScoreTest(framework,ScoreFn,nSamples,rngSeed):
             "ScoreTest() requires saved test locals or saved test model outputs."
         )
 
-    _CheckCallable(ScoreFn,"ScoreFn",2,optional=False)
+    _CheckCallable(ScoreFn, "ScoreFn", 2, optional=False)
 
     if nSamples is not None:
-        _CheckPositiveInt(nSamples,"nSamples")
-        _CheckRngAvailable(framework,rngSeed)
+        _CheckPositiveInt(nSamples, "nSamples")
+        _CheckRngAvailable(framework, rngSeed)
+
+
+def _ValidateSave(
+    fileName,
+    saveTrainLocals,
+    saveTestLocals,
+    saveTrainModelOut,
+    saveTestModelOut,
+    saveAllData,
+):
+    if fileName is not None and not isinstance(fileName, (str, os.PathLike)):
+        raise TypeError(
+            "fileName must be a string, path-like object, or None."
+        )
+
+    _CheckBool(saveTrainLocals, "saveTrainLocals")
+    _CheckBool(saveTestLocals, "saveTestLocals")
+    _CheckBool(saveTrainModelOut, "saveTrainModelOut")
+    _CheckBool(saveTestModelOut, "saveTestModelOut")
+    _CheckBool(saveAllData, "saveAllData")
+
+
+def _ValidateLoad(
+    fileName,
+    ModelFn,
+    GlobalParamFn,
+    modelDataFull,
+):
+    if not isinstance(fileName, (str, os.PathLike)):
+        raise TypeError(
+            "fileName must be a string or path-like object."
+        )
+
+    _CheckCallable(ModelFn, "ModelFn", 3, optional=True)
+    _CheckCallable(GlobalParamFn, "GlobalParamFn", 1, optional=True)
+
+    if modelDataFull is not None:
+        _CheckModelData(modelDataFull)
 
 
 # ====================================================================
 # Shared checks
 # ====================================================================
+
+def _CheckModelData(modelDataFull):
+    if not isinstance(modelDataFull, (dict, np.lib.npyio.NpzFile)):
+        raise TypeError("modelDataFull must be a dictionary.")
+
+    if len(modelDataFull) == 0:
+        raise ValueError("modelDataFull cannot be empty.")
+
+    dataSize = None
+
+    for name, value in modelDataFull.items():
+        if not isinstance(name, str):
+            raise TypeError(
+                f"modelDataFull keys must be strings; "
+                f"got {type(name).__name__}."
+            )
+
+        if not name:
+            raise ValueError("modelDataFull keys cannot be empty strings.")
+
+        if not isinstance(value, (jax.Array, np.ndarray)):
+            raise TypeError(
+                f"modelDataFull['{name}'] must be a JAX or NumPy array; "
+                f"got {type(value).__name__}."
+            )
+
+        if value.ndim == 0:
+            raise ValueError(
+                f"modelDataFull['{name}'] must have at least one dimension "
+                "because its first dimension represents data entries."
+            )
+
+        if dataSize is None:
+            dataSize = len(value)
+        elif len(value) != dataSize:
+            raise ValueError(
+                "All arrays in modelDataFull must have the same first "
+                f"dimension. Expected {dataSize}, but "
+                f"modelDataFull['{name}'] has length {len(value)}."
+            )
+
+    if dataSize == 0:
+        raise ValueError(
+            "modelDataFull must contain at least one data entry."
+        )
+
 
 def _CheckCallable(fn, name, nArgs, optional=False):
     if fn is None:
